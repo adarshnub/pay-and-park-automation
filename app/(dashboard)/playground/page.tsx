@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Card } from "@/src/components/ui/card";
 import { Badge } from "@/src/components/ui/badge";
 import { Button } from "@/src/components/ui/button";
@@ -96,6 +96,42 @@ export default function OcrPlaygroundPage() {
     setFile(nextFile);
     setPreviewUrl(nextFile ? URL.createObjectURL(nextFile) : null);
   }
+
+  const onFileChangeRef = useRef(onFileChange);
+  onFileChangeRef.current = onFileChange;
+
+  useEffect(() => {
+    function onPaste(e: ClipboardEvent) {
+      const target = e.target as HTMLElement | null;
+      if (target?.closest("input, textarea, select, [contenteditable=true]")) return;
+
+      const items = e.clipboardData?.items;
+      if (!items?.length) return;
+
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        if (item.kind !== "file" || !item.type.startsWith("image/")) continue;
+        const blob = item.getAsFile();
+        if (!blob || blob.size === 0) continue;
+
+        e.preventDefault();
+        const ext = blob.type.includes("png")
+          ? "png"
+          : blob.type.includes("webp")
+            ? "webp"
+            : "jpg";
+        const next = new File([blob], `pasted-image.${ext}`, {
+          type: blob.type || "image/png",
+        });
+        onFileChangeRef.current(next);
+        setError("");
+        break;
+      }
+    }
+
+    window.addEventListener("paste", onPaste);
+    return () => window.removeEventListener("paste", onPaste);
+  }, []);
 
   function formatFileSize(bytes: number): string {
     if (bytes < 1024) return `${bytes} B`;
@@ -310,7 +346,7 @@ export default function OcrPlaygroundPage() {
                     {file ? "Replace test image" : "Upload or drop test image"}
                   </p>
                   <p className="text-xs text-muted-foreground">
-                    JPG, PNG, WEBP supported
+                    JPG, PNG, WEBP · paste from clipboard (Ctrl+V / ⌘V) anywhere on this page
                   </p>
                 </div>
               </label>
