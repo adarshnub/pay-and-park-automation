@@ -3,7 +3,7 @@
 ## Setup
 
 1. Run the SQL migrations for shared links and related behavior (see `supabase/migrations/003_lot_shared_links.sql`, `004_visits_active_plate_per_lot.sql`, `005_check_in_disputes.sql`, `006_check_in_disputes_update_policy.sql`).
-2. Set `NEXT_PUBLIC_APP_URL` in production (e.g. `https://your-domain.com`) so newly created links copy as absolute URLs. Locally, the app falls back to `window.location.origin` when copying.
+2. In production, set **`NEXT_PUBLIC_SHAREABLE_LINK_BASE_URL`** to the exact origin you want in copied links (e.g. `https://your-custom-domain.com`), or set **`NEXT_PUBLIC_APP_URL`** for the same value if one URL is enough. These are not inferred from Vercel’s deployment hostname, so links stay on your public domain. Locally, if neither is set, the app uses the browser’s current origin when you create or rotate a link.
 3. `SUPABASE_SERVICE_ROLE_KEY` must be set for server-side public APIs (already required for other features).
 
 ## Owner / admin

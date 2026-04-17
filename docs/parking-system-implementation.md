@@ -474,11 +474,9 @@ cp .env.example .env.local
 # 6. Start development server
 npm run dev
 
-# 7. (Optional) Start ANPR worker
+# 7. (Optional) Start ANPR worker (uses root `.env.local` — same as step 2)
 cd services/anpr-worker
 pip install -r requirements.txt
-cp .env.example .env
-# Edit .env with Supabase service key
 python worker.py
 ```
 
@@ -495,30 +493,32 @@ vercel deploy --prod
 ```bash
 cd services/anpr-worker
 docker build -t anpr-worker .
-docker run -d --env-file .env anpr-worker
+docker run -d --env-file ../../.env.local anpr-worker
 ```
 
 ---
 
 ## Environment Variables
 
-### Next.js App (`.env.local`)
+Use a **single** file at the repository root: **`.env.local`** (copy from `.env.example`). The Next.js app and the ANPR worker both read it (the worker searches upward from `services/anpr-worker` until it finds `.env.local` or `.env`).
+
+### Shared (Next.js + ANPR worker)
 
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `NEXT_PUBLIC_SUPABASE_URL` | Yes | Supabase project URL |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Yes | Supabase anonymous key |
-| `SUPABASE_SERVICE_ROLE_KEY` | Yes | Supabase service role key (server only) |
-| `OPENAI_API_KEY` | No | Enables OpenAI Vision OCR fallback |
-| `OCR_CONFIDENCE_THRESHOLD` | No | Fallback trigger threshold (default: 70) |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Yes | Supabase anonymous key (Next.js client) |
+| `SUPABASE_SERVICE_ROLE_KEY` | Yes | Service role key (Next.js server + worker) |
+| `NEXT_PUBLIC_APP_URL` | No | Public app origin (optional; used for share links if `NEXT_PUBLIC_SHAREABLE_LINK_BASE_URL` is unset) |
+| `NEXT_PUBLIC_SHAREABLE_LINK_BASE_URL` | No | Preferred origin for copied `/s/...` staff links (overrides `NEXT_PUBLIC_APP_URL` for links) |
+| `OPENAI_API_KEY` | No | OpenAI Vision OCR (API routes + worker) |
 
-### ANPR Worker (`.env`)
+The worker also accepts legacy names `SUPABASE_URL` and `SUPABASE_SERVICE_KEY` if you prefer not to duplicate `NEXT_PUBLIC_*` / `SUPABASE_SERVICE_ROLE_KEY`.
+
+### ANPR worker only
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `SUPABASE_URL` | Yes | Supabase project URL |
-| `SUPABASE_SERVICE_KEY` | Yes | Service role key |
-| `OPENAI_API_KEY` | No | Optional fallback |
 | `OCR_CONFIDENCE_THRESHOLD` | No | Default: 70 |
 | `POLL_INTERVAL_SECONDS` | No | Default: 3 |
 

@@ -2,6 +2,7 @@
 
 import { createClient } from "@/src/lib/supabase/server";
 import { generateShareToken } from "@/src/lib/shared-lot/token";
+import { getShareableLinkBaseUrl } from "@/src/lib/shareable-link-url";
 
 export interface LotShareLinkSummary {
   id: string;
@@ -12,16 +13,6 @@ export interface LotShareLinkSummary {
   expires_at: string | null;
   created_at: string;
   last_used_at: string | null;
-}
-
-function getPublicBaseUrl(): string {
-  if (process.env.NEXT_PUBLIC_APP_URL) {
-    return process.env.NEXT_PUBLIC_APP_URL.replace(/\/$/, "");
-  }
-  if (process.env.VERCEL_URL) {
-    return `https://${process.env.VERCEL_URL.replace(/\/$/, "")}`;
-  }
-  return "";
 }
 
 export async function updateOrganization(name: string) {
@@ -218,7 +209,7 @@ export async function createLotShareLink(input: {
   if (!lot) return { success: false, error: "Lot not found" };
 
   const { raw, hash, prefix } = generateShareToken();
-  const base = getPublicBaseUrl();
+  const base = getShareableLinkBaseUrl();
   const baseUrlMissing = !base;
 
   const { data: row, error } = await supabase
@@ -286,7 +277,7 @@ export async function rotateLotShareLinkToken(linkId: string): Promise<{
   if (!existing.is_active) return { success: false, error: "Link is revoked" };
 
   const { raw, hash, prefix } = generateShareToken();
-  const base = getPublicBaseUrl();
+  const base = getShareableLinkBaseUrl();
   const baseUrlMissing = !base;
 
   const { error: updateErr } = await supabase

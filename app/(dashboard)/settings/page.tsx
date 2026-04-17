@@ -20,6 +20,20 @@ import {
 import { Plus, Trash2, Save, Building2, Link2, Ban, Copy, X } from "lucide-react";
 import type { ParkingLot, RatePlan } from "@/src/lib/types";
 
+/** Match server: prefer public env base, then current origin (path-only links from API). */
+function toAbsoluteShareUrl(linkUrl: string, baseUrlMissing: boolean): string {
+  if (!baseUrlMissing) return linkUrl;
+  const path = linkUrl.startsWith("/") ? linkUrl : `/${linkUrl}`;
+  const fromEnv =
+    process.env.NEXT_PUBLIC_SHAREABLE_LINK_BASE_URL?.replace(/\/$/, "") ||
+    process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, "") ||
+    "";
+  if (typeof window !== "undefined") {
+    return `${fromEnv || window.location.origin}${path}`;
+  }
+  return path;
+}
+
 interface OrgForm { name: string }
 interface LotForm { name: string; address: string; total_capacity: number }
 interface RateForm { hourly_rate: number; minimum_charge: number; grace_period_minutes: number; daily_cap: number }
@@ -174,10 +188,10 @@ export default function SettingsPage() {
       name: newLinkLabel.trim() || undefined,
     });
     if (result.success && result.linkUrl && result.token) {
-      const absolute =
-        result.baseUrlMissing && typeof window !== "undefined"
-          ? `${window.location.origin}${result.linkUrl}`
-          : result.linkUrl;
+      const absolute = toAbsoluteShareUrl(
+        result.linkUrl,
+        Boolean(result.baseUrlMissing),
+      );
       setPendingShareUrl(absolute);
       setCopyDone(false);
       try {
@@ -203,10 +217,10 @@ export default function SettingsPage() {
     setSaving(`copy-${linkId}`);
     const result = await rotateLotShareLinkToken(linkId);
     if (result.success && result.linkUrl) {
-      const absolute =
-        result.baseUrlMissing && typeof window !== "undefined"
-          ? `${window.location.origin}${result.linkUrl}`
-          : result.linkUrl;
+      const absolute = toAbsoluteShareUrl(
+        result.linkUrl,
+        Boolean(result.baseUrlMissing),
+      );
       setPendingShareUrl(absolute);
       setCopyDone(false);
       try {
@@ -410,6 +424,15 @@ export default function SettingsPage() {
         </h2>
         <p className="mb-4 text-sm text-muted-foreground">
           Create a link for the selected lot. Staff can open it on a phone to see occupancy and check vehicles in or out without logging in.
+        </p>
+        <p className="mb-4 text-sm text-muted-foreground">
+          Set{" "}
+          <code className="rounded bg-muted px-1 text-xs">
+            NEXT_PUBLIC_SHAREABLE_LINK_BASE_URL
+          </code>{" "}
+          (or{" "}
+          <code className="rounded bg-muted px-1 text-xs">NEXT_PUBLIC_APP_URL</code>
+          ) in production to the exact public origin you want in copied links (e.g. your custom domain). If unset, the browser&apos;s current origin is used when you create or rotate a link.
         </p>
         {lots.length > 0 && selectedLotId ? (
           <div className="space-y-4">

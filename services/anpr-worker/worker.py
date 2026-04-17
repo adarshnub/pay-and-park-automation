@@ -211,7 +211,10 @@ def main():
     logger.info(f"Poll interval: {config.POLL_INTERVAL_SECONDS}s")
 
     if not config.SUPABASE_URL or not config.SUPABASE_SERVICE_KEY:
-        logger.error("SUPABASE_URL and SUPABASE_SERVICE_KEY are required")
+        logger.error(
+            "Set NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in the repo root .env.local "
+            "(or legacy SUPABASE_URL / SUPABASE_SERVICE_KEY)"
+        )
         return
 
     supabase = get_supabase()
