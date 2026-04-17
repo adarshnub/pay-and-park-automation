@@ -36,17 +36,21 @@ export async function checkInVehicle(input: CheckInInput): Promise<CheckInResult
 
   const normalized = normalizePlate(input.confirmedPlate);
 
-  // Check for existing active visit
+  // Check for existing active visit at this lot only (same plate may be at another lot)
   const { data: existing } = await supabase
     .from("visits")
     .select("id")
     .eq("organization_id", profile.organization_id)
+    .eq("parking_lot_id", input.parkingLotId)
     .eq("normalized_plate", normalized)
     .eq("status", "checked_in")
     .maybeSingle();
 
   if (existing) {
-    return { success: false, error: `Vehicle ${normalized} is already checked in` };
+    return {
+      success: false,
+      error: `Vehicle ${normalized} is already checked in at this parking lot`,
+    };
   }
 
   // Upsert vehicle record

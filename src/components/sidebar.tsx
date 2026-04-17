@@ -11,6 +11,8 @@ import {
   Receipt,
   BarChart3,
   Settings,
+  FlaskConical,
+  FileWarning,
 } from "lucide-react";
 
 const navItems = [
@@ -19,8 +21,10 @@ const navItems = [
   { href: "/check-out", label: "Check Out", icon: LogOut },
   { href: "/active-vehicles", label: "Active Vehicles", icon: Car },
   { href: "/visits", label: "All Visits", icon: ClipboardList },
+  { href: "/disputes", label: "Disputes", icon: FileWarning },
   { href: "/billing", label: "Billing", icon: Receipt },
   { href: "/analytics", label: "Analytics", icon: BarChart3 },
+  { href: "/playground", label: "OCR Playground", icon: FlaskConical },
   { href: "/settings", label: "Settings", icon: Settings },
 ] as const;
 
