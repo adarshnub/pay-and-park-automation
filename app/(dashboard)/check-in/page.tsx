@@ -9,6 +9,7 @@ import { ImageUpload } from "@/src/components/image-upload";
 import { PlateReview } from "@/src/components/plate-review";
 import { checkInVehicle } from "@/src/actions/visits";
 import type { ParkingLot } from "@/src/lib/types";
+import type { OcrTokenUsage } from "@/src/lib/ocr/pipeline";
 import { Camera, Keyboard, CheckCircle, AlertCircle } from "lucide-react";
 
 type Step = "select-lot" | "capture" | "review" | "success" | "error";
@@ -29,6 +30,7 @@ export default function CheckInPage() {
   const [detectedPlate, setDetectedPlate] = useState("");
   const [confidence, setConfidence] = useState<number | null>(null);
   const [engineUsed, setEngineUsed] = useState<string | null>(null);
+  const [tokenUsage, setTokenUsage] = useState<OcrTokenUsage | null>(null);
   const [croppedPlateUrl, setCroppedPlateUrl] = useState<string | null>(null);
   const [capturedGeo, setCapturedGeo] = useState<{ lat: number; lng: number } | null>(null);
   const [capturedFile, setCapturedFile] = useState<File | null>(null);
@@ -94,6 +96,7 @@ export default function CheckInPage() {
       setDetectedPlate(result.plate ?? "");
       setConfidence(result.confidence ?? null);
       setEngineUsed(result.engine ?? null);
+      setTokenUsage(result.tokenUsage ?? null);
       setCroppedPlateUrl(result.croppedPlateUrl ?? null);
       setStep("review");
     } catch (err) {
@@ -111,6 +114,7 @@ export default function CheckInPage() {
     setCroppedPlateUrl(null);
     setConfidence(null);
     setEngineUsed(null);
+    setTokenUsage(null);
     setStep("review");
   }
 
@@ -149,6 +153,7 @@ export default function CheckInPage() {
     setDetectedPlate("");
     setConfidence(null);
     setEngineUsed(null);
+    setTokenUsage(null);
     setCroppedPlateUrl(null);
     setCapturedGeo(null);
     setCapturedFile(null);
@@ -246,6 +251,7 @@ export default function CheckInPage() {
             detectedPlate={detectedPlate}
             confidence={confidence}
             engineUsed={engineUsed}
+            tokenUsage={tokenUsage}
             action="check_in"
             onConfirm={handleConfirmPlate}
             onCancel={() => setStep("capture")}

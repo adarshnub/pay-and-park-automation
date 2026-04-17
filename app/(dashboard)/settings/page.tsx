@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
+import dynamic from "next/dynamic";
 import { useForm } from "react-hook-form";
 import { createClient } from "@/src/lib/supabase/client";
 import { Card } from "@/src/components/ui/card";
@@ -15,10 +16,29 @@ import {
   createLotShareLink,
   revokeLotShareLink,
   rotateLotShareLinkToken,
+  updateOrganizationOcrDetectionMode,
+  getOcrDetectionStrategyLabels,
   type LotShareLinkSummary,
 } from "@/src/actions/settings";
+import { normalizeOcrDetectionMode, type OcrDetectionMode } from "@/src/lib/ocr/detection-mode";
 import { Plus, Trash2, Save, Building2, Link2, Ban, Copy, X } from "lucide-react";
 import type { ParkingLot, RatePlan } from "@/src/lib/types";
+
+/** Toggle the “OCR & API usage” card on Settings (deployment / try-order summary). */
+const SHOW_OCR_USAGE_SECTION = false;
+
+const OcrUsageSection = dynamic(
+  () =>
+    import("@/src/components/settings/ocr-usage-section").then((m) => m.OcrUsageSection),
+  {
+    ssr: false,
+    loading: () => (
+      <Card className="p-6">
+        <p className="text-sm text-muted-foreground">Loading OCR deployment info…</p>
+      </Card>
+    ),
+  },
+);
 
 /** Match server: prefer public env base, then current origin (path-only links from API). */
 function toAbsoluteShareUrl(linkUrl: string, baseUrlMissing: boolean): string {
@@ -52,6 +72,38 @@ export default function SettingsPage() {
   /** Full URL shown once after create — copyable in UI */
   const [pendingShareUrl, setPendingShareUrl] = useState<string | null>(null);
   const [copyDone, setCopyDone] = useState(false);
+  const [ocrDetectionMode, setOcrDetectionMode] = useState<OcrDetectionMode>("openai");
+  const [strategyLabels, setStrategyLabels] = useState({
+    openaiModel: "gpt-4o-mini",
+    geminiModel: "gemini-2.0-flash",
+  });
+  const [canEditOcrMode, setCanEditOcrMode] = useState(false);
+  /** After true, non-editors cannot change the selected strategy (menu still opens). */
+  const [ocrPermissionResolved, setOcrPermissionResolved] = useState(false);
+  const [savingOcrMode, setSavingOcrMode] = useState(false);
+
+  const ocrStrategyOptions = useMemo(
+    () =>
+      [
+        {
+          id: "openai" as const,
+          label: `OpenAI (${strategyLabels.openaiModel})`,
+          description: `Vision OCR using ${strategyLabels.openaiModel} only. Set OPENAI_API_KEY on the server (optional OPENAI_OCR_MODEL to override the default).`,
+        },
+        {
+          id: "gemini" as const,
+          label: `Gemini (${strategyLabels.geminiModel})`,
+          description: `Google Gemini vision using ${strategyLabels.geminiModel} only. Set GEMINI_API_KEY (AI Studio key) and optional GEMINI_MODEL.`,
+        },
+        {
+          id: "tesseract" as const,
+          label: "Tesseract (Edge → Node)",
+          description:
+            "Tesseract.js only: tries Supabase Edge OCR if configured, otherwise Node Tesseract. On Vercel, Node Tesseract needs SHARED_LOT_ALLOW_SERVER_TESSERACT=true.",
+        },
+      ] as const,
+    [strategyLabels.openaiModel, strategyLabels.geminiModel],
+  );
 
   const orgForm = useForm<OrgForm>({ defaultValues: { name: "" } });
   const lotForm = useForm<LotForm>({ defaultValues: { name: "", address: "", total_capacity: 50 } });
@@ -60,33 +112,64 @@ export default function SettingsPage() {
   });
 
   useEffect(() => {
+    let cancelled = false;
     async function loadSettings() {
       try {
         const supabase = createClient();
-        const { data: orgData } = await supabase
-          .from("organizations")
-          .select("name")
-          .limit(1)
-          .maybeSingle();
-        if (orgData) orgForm.reset({ name: orgData.name });
+        const [labels, authRes, orgRes, lotsRes] = await Promise.all([
+          getOcrDetectionStrategyLabels(),
+          supabase.auth.getUser(),
+          supabase.from("organizations").select("name, ocr_detection_mode").limit(1).maybeSingle(),
+          supabase.from("parking_lots").select("*").eq("is_active", true).order("name"),
+        ]);
+        if (cancelled) return;
 
-        const { data: lotsData } = await supabase
-          .from("parking_lots")
-          .select("*")
-          .eq("is_active", true)
-          .order("name");
+        setStrategyLabels(labels);
+
+        const authUser = authRes.data.user;
+        if (authUser) {
+          const { data: profileRow } = await supabase
+            .from("profiles")
+            .select("role")
+            .eq("id", authUser.id)
+            .maybeSingle();
+          setCanEditOcrMode(
+            profileRow?.role === "owner" || profileRow?.role === "admin",
+          );
+        } else {
+          setCanEditOcrMode(false);
+        }
+        setOcrPermissionResolved(true);
+
+        const orgData = orgRes.data;
+        if (orgData) {
+          orgForm.reset({ name: orgData.name });
+          setOcrDetectionMode(
+            normalizeOcrDetectionMode(
+              (orgData as { ocr_detection_mode?: string | null }).ocr_detection_mode,
+            ),
+          );
+        }
+
+        const lotsData = lotsRes.data;
         if (lotsData && lotsData.length > 0) {
+          const firstId = lotsData[0].id;
           setLots(lotsData as ParkingLot[]);
-          setSelectedLotId(lotsData[0].id);
-          await loadRatePlan(lotsData[0].id);
-          await loadShareLinks(lotsData[0].id);
-          await loadAllOrgShareLinks();
+          setSelectedLotId(firstId);
+          await Promise.all([
+            loadRatePlan(firstId),
+            loadShareLinks(firstId),
+            loadAllOrgShareLinks(),
+          ]);
         }
       } catch {
         // Supabase not configured
       }
     }
-    loadSettings();
+    void loadSettings();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -247,6 +330,18 @@ export default function SettingsPage() {
     } else showError(result.error ?? "Failed to revoke");
   }
 
+  async function saveOcrDetectionMode() {
+    if (!canEditOcrMode) return;
+    setSavingOcrMode(true);
+    try {
+      const result = await updateOrganizationOcrDetectionMode(ocrDetectionMode);
+      if (result.success) showSuccess("OCR detection mode updated.");
+      else showError(result.error ?? "Could not save OCR mode");
+    } finally {
+      setSavingOcrMode(false);
+    }
+  }
+
   async function saveRatePlanForm(data: RateForm) {
     if (!selectedLotId) return;
     setSaving("rate");
@@ -281,6 +376,58 @@ export default function SettingsPage() {
           {errorMsg}
         </div>
       )}
+
+      {SHOW_OCR_USAGE_SECTION ? <OcrUsageSection /> : null}
+
+      <Card className="p-6">
+        <h2 className="mb-1 text-lg font-semibold">Plate photo detection (OCR)</h2>
+        <p className="mb-4 text-sm text-muted-foreground">
+          Applies to <span className="font-medium text-foreground">Check In</span>,{" "}
+          <span className="font-medium text-foreground">Check Out</span>, and{" "}
+          <span className="font-medium text-foreground">shared staff link</span> photo scans. Labels
+          show the models this server uses (from env or defaults).
+        </p>
+        {!canEditOcrMode && (
+          <p id="ocr-mode-permission-hint" className="mb-3 text-xs text-muted-foreground">
+            Only organization owners and admins can save a different strategy. You can still open
+            the menu below to compare options.
+          </p>
+        )}
+        <div className="relative z-10 space-y-3 overflow-visible">
+          <label htmlFor="ocr-detection-mode" className="text-sm font-medium">
+            Detection strategy
+          </label>
+          <select
+            id="ocr-detection-mode"
+            value={ocrDetectionMode}
+            onChange={(e) => {
+              if (savingOcrMode) return;
+              if (ocrPermissionResolved && !canEditOcrMode) return;
+              setOcrDetectionMode(normalizeOcrDetectionMode(e.target.value));
+            }}
+            aria-describedby={!canEditOcrMode ? "ocr-mode-permission-hint" : undefined}
+            disabled={savingOcrMode}
+            className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-ring focus:ring-2 focus:ring-ring/20 disabled:cursor-wait disabled:opacity-70"
+          >
+            {ocrStrategyOptions.map((opt) => (
+              <option key={opt.id} value={opt.id}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
+          <p className="text-xs text-muted-foreground">
+            {ocrStrategyOptions.find((o) => o.id === ocrDetectionMode)?.description}
+          </p>
+          <Button
+            type="button"
+            variant="secondary"
+            disabled={!canEditOcrMode || savingOcrMode}
+            onClick={() => void saveOcrDetectionMode()}
+          >
+            {savingOcrMode ? "Saving…" : "Save OCR mode"}
+          </Button>
+        </div>
+      </Card>
 
       <Card className="p-6">
         <h2 className="mb-4 text-lg font-semibold">Organization</h2>

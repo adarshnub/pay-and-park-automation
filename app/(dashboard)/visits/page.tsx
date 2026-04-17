@@ -14,17 +14,36 @@ interface VisitWithLot extends Visit {
   parking_lots?: { name: string } | null;
 }
 
-async function getVisits(page: number) {
+async function getParkingLotsForFilter() {
+  try {
+    const supabase = await createClient();
+    const { data } = await supabase
+      .from("parking_lots")
+      .select("id, name")
+      .eq("is_active", true)
+      .order("name");
+    return data ?? [];
+  } catch {
+    return [];
+  }
+}
+
+async function getVisits(page: number, parkingLotId?: string) {
   try {
     const supabase = await createClient();
     const from = (page - 1) * PAGE_SIZE;
     const to = from + PAGE_SIZE - 1;
 
-    const { data, count } = await supabase
+    let query = supabase
       .from("visits")
       .select("*, parking_lots(name)", { count: "exact" })
-      .order("created_at", { ascending: false })
-      .range(from, to);
+      .order("created_at", { ascending: false });
+
+    if (parkingLotId) {
+      query = query.eq("parking_lot_id", parkingLotId);
+    }
+
+    const { data, count } = await query.range(from, to);
 
     return {
       visits: (data as VisitWithLot[]) ?? [],
@@ -33,6 +52,14 @@ async function getVisits(page: number) {
   } catch {
     return { visits: [], total: 0 };
   }
+}
+
+function visitsPageHref(pageNum: number, lotId?: string) {
+  const q = new URLSearchParams();
+  if (pageNum > 1) q.set("page", String(pageNum));
+  if (lotId) q.set("lot", lotId);
+  const s = q.toString();
+  return s ? `/visits?${s}` : "/visits";
 }
 
 function statusVariant(status: string) {
@@ -64,11 +91,16 @@ function statusLabel(status: string) {
 export default async function VisitsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ page?: string }>;
+  searchParams: Promise<{ page?: string; lot?: string }>;
 }) {
   const params = await searchParams;
   const page = Math.max(1, parseInt(params.page ?? "1", 10));
-  const { visits, total } = await getVisits(page);
+  const lots = await getParkingLotsForFilter();
+  const lotIds = new Set(lots.map((l) => l.id));
+  const lotFilter =
+    params.lot && lotIds.has(params.lot) ? params.lot : undefined;
+
+  const { visits, total } = await getVisits(page, lotFilter);
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   return (
@@ -77,15 +109,46 @@ export default async function VisitsPage({
         <h1 className="text-2xl font-bold tracking-tight">All Visits</h1>
         <p className="text-sm text-muted-foreground">
           {total} total visit{total !== 1 ? "s" : ""}
+          {lotFilter ? " (filtered by lot)" : ""}
         </p>
       </div>
+
+      <Card className="p-4">
+        <form method="get" className="flex flex-col gap-3 sm:flex-row sm:items-end">
+          <div className="min-w-0 flex-1 sm:max-w-xs">
+            <label htmlFor="visits-lot" className="mb-1 block text-xs font-medium text-muted-foreground">
+              Parking lot
+            </label>
+            <select
+              id="visits-lot"
+              name="lot"
+              defaultValue={lotFilter ?? ""}
+              className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-ring focus:ring-2 focus:ring-ring/20"
+            >
+              <option value="">All lots</option>
+              {lots.map((l) => (
+                <option key={l.id} value={l.id}>
+                  {l.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <Button type="submit" variant="outline" className="shrink-0">
+            Apply
+          </Button>
+        </form>
+      </Card>
 
       {visits.length === 0 ? (
         <Card className="p-12 text-center">
           <ClipboardList className="mx-auto mb-3 h-10 w-10 text-muted-foreground" />
-          <p className="font-medium">No visits yet</p>
+          <p className="font-medium">
+            {lotFilter ? "No visits for this lot" : "No visits yet"}
+          </p>
           <p className="mt-1 text-sm text-muted-foreground">
-            Visits will appear here as vehicles are checked in.
+            {lotFilter
+              ? "Try another lot or show all lots."
+              : "Visits will appear here as vehicles are checked in."}
           </p>
         </Card>
       ) : (
@@ -164,7 +227,7 @@ export default async function VisitsPage({
             </p>
             <div className="flex gap-2">
               {page > 1 && (
-                <Link href={`/visits?page=${page - 1}`}>
+                <Link href={visitsPageHref(page - 1, lotFilter)}>
                   <Button variant="outline" size="sm">
                     <ChevronLeft className="mr-1 h-4 w-4" />
                     Previous
@@ -172,7 +235,7 @@ export default async function VisitsPage({
                 </Link>
               )}
               {page < totalPages && (
-                <Link href={`/visits?page=${page + 1}`}>
+                <Link href={visitsPageHref(page + 1, lotFilter)}>
                   <Button variant="outline" size="sm">
                     Next
                     <ChevronRight className="ml-1 h-4 w-4" />

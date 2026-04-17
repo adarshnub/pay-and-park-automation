@@ -10,6 +10,7 @@ import { ImageUpload } from "@/src/components/image-upload";
 import { PlateReview } from "@/src/components/plate-review";
 import { lookupActiveVisit, confirmCheckOut, type CheckOutLookupResult } from "@/src/actions/visits";
 import { formatPlateDisplay } from "@/src/lib/plate";
+import type { OcrTokenUsage } from "@/src/lib/ocr/pipeline";
 import { formatCurrency, formatDuration } from "@/src/lib/utils";
 import {
   Camera,
@@ -48,6 +49,7 @@ function CheckOutContent() {
   const [detectedPlate, setDetectedPlate] = useState(prefillPlate);
   const [confidence, setConfidence] = useState<number | null>(null);
   const [engineUsed, setEngineUsed] = useState<string | null>(null);
+  const [tokenUsage, setTokenUsage] = useState<OcrTokenUsage | null>(null);
   const [croppedPlateUrl, setCroppedPlateUrl] = useState<string | null>(null);
 
   // Visit details state
@@ -73,6 +75,7 @@ function CheckOutContent() {
       setDetectedPlate(result.plate ?? "");
       setConfidence(result.confidence ?? null);
       setEngineUsed(result.engine ?? null);
+      setTokenUsage(result.tokenUsage ?? null);
       setCroppedPlateUrl(result.croppedPlateUrl ?? null);
       setStep("review");
     } catch (err) {
@@ -90,6 +93,7 @@ function CheckOutContent() {
     setCroppedPlateUrl(null);
     setConfidence(null);
     setEngineUsed(null);
+    setTokenUsage(null);
     setStep("review");
   }
 
@@ -148,6 +152,7 @@ function CheckOutContent() {
     setDetectedPlate("");
     setConfidence(null);
     setEngineUsed(null);
+    setTokenUsage(null);
     setCroppedPlateUrl(null);
     setVisitDetails(null);
     setConfirmedPlate("");
@@ -217,6 +222,7 @@ function CheckOutContent() {
             detectedPlate={detectedPlate}
             confidence={confidence}
             engineUsed={engineUsed}
+            tokenUsage={tokenUsage}
             action="check_out"
             onConfirm={handleConfirmPlate}
             onCancel={() => setStep("capture")}

@@ -3,6 +3,8 @@
 import { createClient } from "@/src/lib/supabase/server";
 import { generateShareToken } from "@/src/lib/shared-lot/token";
 import { getShareableLinkBaseUrl } from "@/src/lib/shareable-link-url";
+import { normalizeOcrDetectionMode, type OcrDetectionMode } from "@/src/lib/ocr/detection-mode";
+import { getGeminiOcrModel, getOpenAiOcrModel } from "@/src/lib/ocr/ocr-models";
 
 export interface LotShareLinkSummary {
   id: string;
@@ -38,6 +40,43 @@ export async function updateOrganization(name: string) {
     .eq("id", profile.organization_id);
 
   return error ? { success: false, error: error.message } : { success: true };
+}
+
+export async function getOcrDetectionStrategyLabels(): Promise<{
+  openaiModel: string;
+  geminiModel: string;
+}> {
+  return {
+    openaiModel: getOpenAiOcrModel(),
+    geminiModel: getGeminiOcrModel(),
+  };
+}
+
+export async function updateOrganizationOcrDetectionMode(mode: string) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { success: false as const, error: "Not authenticated" };
+
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select("organization_id, role")
+    .eq("id", user.id)
+    .single();
+
+  if (!profile || !["owner", "admin"].includes(profile.role)) {
+    return { success: false as const, error: "Insufficient permissions" };
+  }
+
+  const normalized: OcrDetectionMode = normalizeOcrDetectionMode(mode);
+
+  const { error } = await supabase
+    .from("organizations")
+    .update({ ocr_detection_mode: normalized })
+    .eq("id", profile.organization_id);
+
+  return error ? { success: false as const, error: error.message } : { success: true as const };
 }
 
 export async function addParkingLot(input: {

@@ -7,6 +7,8 @@ import { Input } from "@/src/components/ui/input";
 import { Badge } from "@/src/components/ui/badge";
 import { Spinner } from "@/src/components/ui/spinner";
 import { AlertTriangle, Check, X } from "lucide-react";
+import type { OcrTokenUsage } from "@/src/lib/ocr/pipeline";
+import { formatTokenUsageLine } from "@/src/lib/ocr/format-token-usage";
 
 interface PlateReviewProps {
   imageUrl: string | null;
@@ -14,6 +16,8 @@ interface PlateReviewProps {
   detectedPlate: string;
   confidence: number | null;
   engineUsed: string | null;
+  /** Set when the last cloud vision call returned usage metadata (same request as the plate). */
+  tokenUsage?: OcrTokenUsage | null;
   action: "check_in" | "check_out";
   onConfirm: (confirmedPlate: string, wasEdited: boolean) => void;
   onCancel: () => void;
@@ -33,6 +37,7 @@ export function PlateReview({
   detectedPlate,
   confidence,
   engineUsed,
+  tokenUsage,
   action,
   onConfirm,
   onCancel,
@@ -110,6 +115,12 @@ export function PlateReview({
         {wasEdited && (
           <p className="text-xs text-warning">
             Plate was manually edited (original: {originalPlate.current})
+          </p>
+        )}
+        {tokenUsage && (
+          <p className="rounded-md border border-border bg-muted/40 px-2 py-1.5 text-xs text-muted-foreground">
+            <span className="font-medium text-foreground">Last model call:</span>{" "}
+            <span className="font-mono">{formatTokenUsageLine(tokenUsage)}</span>
           </p>
         )}
       </div>

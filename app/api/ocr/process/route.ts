@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { processWithOpenAI, processWithTesseract } from "@/src/lib/ocr/pipeline";
+import { createClient } from "@/src/lib/supabase/server";
+import { logOcrInferenceUsage } from "@/src/lib/ocr/inference-logger";
+import { normalizeOcrDetectionMode } from "@/src/lib/ocr/detection-mode";
+import { runServerOcrPipeline } from "@/src/lib/ocr/server-ocr-pipeline";
 
-export const maxDuration = 30;
+export const maxDuration = 60;
 
 export async function POST(request: NextRequest) {
   try {
@@ -17,21 +20,52 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "No image provided" }, { status: 400 });
     }
 
-    const imageBytes = Buffer.from(await imageFile.arrayBuffer());
-
-    // Try OpenAI first if configured (fast + accurate)
-    const openaiKey = process.env.OPENAI_API_KEY;
-    if (openaiKey) {
-      try {
-        const result = await processWithOpenAI(imageBytes, imageFile.type, openaiKey, "gpt-4o-mini");
-        if (result.plate) return NextResponse.json(result);
-      } catch {
-        // fall through to free engine
+    const supabase = await createClient();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    let organizationId: string | null = null;
+    let detectionMode = normalizeOcrDetectionMode(undefined);
+    if (user) {
+      const { data: profile } = await supabase
+        .from("profiles")
+        .select("organization_id")
+        .eq("id", user.id)
+        .maybeSingle();
+      organizationId = profile?.organization_id ?? null;
+      if (organizationId) {
+        const { data: orgRow, error: orgModeErr } = await supabase
+          .from("organizations")
+          .select("ocr_detection_mode")
+          .eq("id", organizationId)
+          .maybeSingle();
+        if (!orgModeErr && orgRow) {
+          detectionMode = normalizeOcrDetectionMode(
+            (orgRow as { ocr_detection_mode?: string | null }).ocr_detection_mode,
+          );
+        }
       }
     }
 
-    // Free path: Sharp preprocessing + Tesseract.js
-    const result = await processWithTesseract(imageBytes);
+    const imageBytes = Buffer.from(await imageFile.arrayBuffer());
+    const mimeType = imageFile.type || "image/jpeg";
+
+    const result = await runServerOcrPipeline({
+      imageBytes,
+      mimeType,
+      logLabel: "api/ocr/process",
+      detectionMode,
+      onInferenceUsage:
+        organizationId != null
+          ? (tokenUsage) =>
+              logOcrInferenceUsage({
+                organizationId,
+                parkingLotId: null,
+                source: "dashboard",
+                tokenUsage,
+              })
+          : undefined,
+    });
     return NextResponse.json(result);
   } catch (err) {
     return NextResponse.json(
@@ -40,4 +74,3 @@ export async function POST(request: NextRequest) {
     );
   }
 }
-

@@ -1,0 +1,5 @@
+# Supabase CLI / Edge Functions. Merge with your full project config if you already use one.
+# https://supabase.com/docs/guides/functions/function-configuration
+
+[functions.ocr-tesseract]
+verify_jwt = false

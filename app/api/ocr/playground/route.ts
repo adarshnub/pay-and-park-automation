@@ -1,12 +1,24 @@
 import { NextRequest, NextResponse } from "next/server";
 import { parseIndianPlate } from "@/src/lib/plate";
-import { processWithOpenAI, processWithTesseract } from "@/src/lib/ocr/pipeline";
+import {
+  processWithGemini,
+  processWithOpenAI,
+  processWithTesseract,
+  type OcrTokenUsage,
+} from "@/src/lib/ocr/pipeline";
 
 export const maxDuration = 60;
 
 const OPENAI_MODELS = ["gpt-4o-mini", "gpt-4.1-mini", "gpt-4.1"] as const;
 
-type PlaygroundMode = "free" | "openai";
+/** Models to try in playground (invalid names surface as API errors in the result card). */
+const GEMINI_MODELS = [
+  "gemini-2.0-flash",
+  "gemini-2.5-flash",
+  "gemini-1.5-flash",
+] as const;
+
+type PlaygroundMode = "free" | "openai" | "gemini";
 
 interface PlaygroundResult {
   mode: PlaygroundMode;
@@ -18,6 +30,8 @@ interface PlaygroundResult {
   isValidIndianPlate: boolean;
   message: string | null;
   error: string | null;
+  /** OpenAI usage for this model call only (Tesseract has none). */
+  tokenUsage: OcrTokenUsage | null;
 }
 
 function computeScore(plate: string, confidence: number): number {
@@ -38,15 +52,23 @@ function parseJsonArray(value: FormDataEntryValue | null): string[] {
   }
 }
 
+function geminiKeyConfigured(): boolean {
+  const k = process.env.GEMINI_API_KEY?.trim() ?? "";
+  return k.length > 0 && k.startsWith("AIza");
+}
+
 export async function GET() {
   return NextResponse.json({
-    modes: ["free", "openai"],
+    modes: ["free", "openai", "gemini"],
     methods: [
       { id: "tesseract", mode: "free", label: "Tesseract + Sharp preprocessing" },
       { id: "vision", mode: "openai", label: "OpenAI Vision OCR" },
+      { id: "gemini-vision", mode: "gemini", label: "Gemini Vision OCR" },
     ],
     models: OPENAI_MODELS,
+    geminiModels: GEMINI_MODELS,
     openaiConfigured: Boolean(process.env.OPENAI_API_KEY),
+    geminiConfigured: geminiKeyConfigured(),
   });
 }
 
@@ -57,6 +79,7 @@ export async function POST(request: NextRequest) {
     const selectedModes = parseJsonArray(formData.get("modes")) as PlaygroundMode[];
     const selectedMethods = parseJsonArray(formData.get("methods"));
     const selectedModels = parseJsonArray(formData.get("models"));
+    const selectedGeminiModels = parseJsonArray(formData.get("geminiModels"));
 
     if (!imageFile) {
       return NextResponse.json({ error: "No image provided" }, { status: 400 });
@@ -84,6 +107,7 @@ export async function POST(request: NextRequest) {
               isValidIndianPlate: parsed.isValid,
               message: result.message ?? null,
               error: null,
+              tokenUsage: null,
             };
           })
           .catch((error) => ({
@@ -96,6 +120,7 @@ export async function POST(request: NextRequest) {
             isValidIndianPlate: false,
             message: null,
             error: error instanceof Error ? error.message : "Free OCR failed",
+            tokenUsage: null,
           })),
       );
     }
@@ -114,6 +139,7 @@ export async function POST(request: NextRequest) {
             isValidIndianPlate: false,
             message: null,
             error: "OPENAI_API_KEY is not configured",
+            tokenUsage: null,
           }),
         );
       } else {
@@ -133,6 +159,7 @@ export async function POST(request: NextRequest) {
                   isValidIndianPlate: parsed.isValid,
                   message: result.message ?? null,
                   error: null,
+                  tokenUsage: result.tokenUsage ?? null,
                 };
               })
               .catch((error) => ({
@@ -145,6 +172,63 @@ export async function POST(request: NextRequest) {
                 isValidIndianPlate: false,
                 message: null,
                 error: error instanceof Error ? error.message : "OpenAI OCR failed",
+                tokenUsage: null,
+              })),
+          );
+        }
+      }
+    }
+
+    if (selectedModes.includes("gemini") && selectedMethods.includes("gemini-vision")) {
+      const apiKey = process.env.GEMINI_API_KEY?.trim() ?? "";
+      if (!apiKey || !apiKey.startsWith("AIza")) {
+        tasks.push(
+          Promise.resolve({
+            mode: "gemini" as const,
+            method: "gemini-vision",
+            model: null,
+            plate: "",
+            confidence: 0,
+            score: 0,
+            isValidIndianPlate: false,
+            message: null,
+            error:
+              "GEMINI_API_KEY is missing or not a Google AI Studio key (must start with AIza).",
+            tokenUsage: null,
+          }),
+        );
+      } else {
+        const models =
+          selectedGeminiModels.length > 0 ? selectedGeminiModels : [GEMINI_MODELS[0]];
+        for (const model of models) {
+          tasks.push(
+            processWithGemini(imageBytes, mimeType, apiKey, model)
+              .then((result) => {
+                const parsed = parseIndianPlate(result.plate);
+                return {
+                  mode: "gemini" as const,
+                  method: "gemini-vision",
+                  model,
+                  plate: result.plate,
+                  confidence: result.confidence,
+                  score: computeScore(result.plate, result.confidence),
+                  isValidIndianPlate: parsed.isValid,
+                  message: result.message ?? null,
+                  error: null,
+                  tokenUsage: result.tokenUsage ?? null,
+                };
+              })
+              .catch((error) => ({
+                mode: "gemini" as const,
+                method: "gemini-vision",
+                model,
+                plate: "",
+                confidence: 0,
+                score: 0,
+                isValidIndianPlate: false,
+                message: null,
+                error: error instanceof Error ? error.message : "Gemini OCR failed",
+                tokenUsage: null,
               })),
           );
         }

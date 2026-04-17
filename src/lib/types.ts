@@ -9,6 +9,8 @@ export interface Organization {
   name: string;
   slug: string;
   created_at: string;
+  /** Server OCR strategy for dashboard + shared-link image routes (see `detection-mode.ts`). */
+  ocr_detection_mode?: string;
 }
 
 export interface Profile {

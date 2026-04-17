@@ -13,6 +13,7 @@ import {
   Settings,
   FlaskConical,
   FileWarning,
+  Sparkles,
 } from "lucide-react";
 
 const navItems = [
@@ -24,6 +25,7 @@ const navItems = [
   { href: "/disputes", label: "Disputes", icon: FileWarning },
   { href: "/billing", label: "Billing", icon: Receipt },
   { href: "/analytics", label: "Analytics", icon: BarChart3 },
+  { href: "/usage", label: "Token usage", icon: Sparkles },
   { href: "/playground", label: "OCR Playground", icon: FlaskConical },
   { href: "/settings", label: "Settings", icon: Settings },
 ] as const;

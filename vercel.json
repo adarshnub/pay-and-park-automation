@@ -1,0 +1,11 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "functions": {
+    "app/api/shared-lot/process-image/route.ts": {
+      "maxDuration": 60
+    },
+    "app/api/ocr/playground/route.ts": {
+      "maxDuration": 60
+    }
+  }
+}

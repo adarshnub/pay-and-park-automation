@@ -6,13 +6,27 @@ import { Button } from "@/src/components/ui/button";
 import { formatPlateDisplay } from "@/src/lib/plate";
 import { formatDuration } from "@/src/lib/utils";
 import { Car, LogOut, Search } from "lucide-react";
-import type { Visit, ParkingLot } from "@/src/lib/types";
+import type { Visit } from "@/src/lib/types";
 
 interface ActiveVehicle extends Visit {
   parking_lots?: { name: string } | null;
 }
 
-async function getActiveVehicles(search?: string) {
+async function getParkingLotsForFilter() {
+  try {
+    const supabase = await createClient();
+    const { data } = await supabase
+      .from("parking_lots")
+      .select("id, name")
+      .eq("is_active", true)
+      .order("name");
+    return data ?? [];
+  } catch {
+    return [];
+  }
+}
+
+async function getActiveVehicles(search?: string, parkingLotId?: string) {
   try {
     const supabase = await createClient();
     let query = supabase
@@ -21,6 +35,9 @@ async function getActiveVehicles(search?: string) {
       .eq("status", "checked_in")
       .order("check_in_at", { ascending: false });
 
+    if (parkingLotId) {
+      query = query.eq("parking_lot_id", parkingLotId);
+    }
     if (search) {
       query = query.ilike("normalized_plate", `%${search}%`);
     }
@@ -35,11 +52,16 @@ async function getActiveVehicles(search?: string) {
 export default async function ActiveVehiclesPage({
   searchParams,
 }: {
-  searchParams: Promise<{ q?: string }>;
+  searchParams: Promise<{ q?: string; lot?: string }>;
 }) {
   const params = await searchParams;
   const search = params.q ?? "";
-  const vehicles = await getActiveVehicles(search);
+  const lots = await getParkingLotsForFilter();
+  const lotIds = new Set(lots.map((l) => l.id));
+  const lotFilter =
+    params.lot && lotIds.has(params.lot) ? params.lot : undefined;
+
+  const vehicles = await getActiveVehicles(search, lotFilter);
 
   const now = new Date();
 
@@ -50,22 +72,47 @@ export default async function ActiveVehiclesPage({
         <p className="text-sm text-muted-foreground">
           {vehicles.length} vehicle{vehicles.length !== 1 ? "s" : ""} currently
           parked
+          {lotFilter ? " (filtered by lot)" : ""}
         </p>
       </div>
 
       <Card className="p-4">
-        <form className="flex gap-2">
-          <div className="relative flex-1">
-            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-            <input
-              name="q"
-              defaultValue={search}
-              placeholder="Search by plate number…"
-              className="w-full rounded-lg border border-input bg-background py-2 pl-9 pr-3 text-sm outline-none focus:border-ring focus:ring-2 focus:ring-ring/20"
-            />
+        <form method="get" className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end">
+          <div className="relative min-w-0 flex-1 sm:min-w-[200px]">
+            <label htmlFor="active-lot" className="mb-1 block text-xs font-medium text-muted-foreground">
+              Parking lot
+            </label>
+            <select
+              id="active-lot"
+              name="lot"
+              defaultValue={lotFilter ?? ""}
+              className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-ring focus:ring-2 focus:ring-ring/20"
+            >
+              <option value="">All lots</option>
+              {lots.map((l) => (
+                <option key={l.id} value={l.id}>
+                  {l.name}
+                </option>
+              ))}
+            </select>
           </div>
-          <Button type="submit" variant="outline">
-            Search
+          <div className="relative min-w-0 flex-1">
+            <label htmlFor="active-q" className="mb-1 block text-xs font-medium text-muted-foreground">
+              Plate search
+            </label>
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <input
+                id="active-q"
+                name="q"
+                defaultValue={search}
+                placeholder="Search by plate number…"
+                className="w-full rounded-lg border border-input bg-background py-2 pl-9 pr-3 text-sm outline-none focus:border-ring focus:ring-2 focus:ring-ring/20"
+              />
+            </div>
+          </div>
+          <Button type="submit" variant="outline" className="shrink-0">
+            Apply
           </Button>
         </form>
       </Card>
@@ -75,8 +122,8 @@ export default async function ActiveVehiclesPage({
           <Car className="mx-auto mb-3 h-10 w-10 text-muted-foreground" />
           <p className="font-medium">No active vehicles</p>
           <p className="mt-1 text-sm text-muted-foreground">
-            {search
-              ? "No vehicles match your search."
+            {search || lotFilter
+              ? "No vehicles match your filters."
               : "All parking lots are empty."}
           </p>
         </Card>

@@ -55,6 +55,7 @@ SUPABASE_SERVICE_KEY = (
     or os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()
 )
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
+OCR_SERVICE_SECRET = os.getenv("OCR_SERVICE_SECRET", "").strip()
 OCR_CONFIDENCE_THRESHOLD = int(os.getenv("OCR_CONFIDENCE_THRESHOLD", "70"))
 POLL_INTERVAL_SECONDS = int(os.getenv("POLL_INTERVAL_SECONDS", "3"))
 STORAGE_BUCKET = "vehicle-images"

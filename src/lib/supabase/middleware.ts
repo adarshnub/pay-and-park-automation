@@ -39,6 +39,7 @@ export async function updateSession(request: NextRequest) {
     request.nextUrl.pathname.startsWith("/disputes") ||
     request.nextUrl.pathname.startsWith("/billing") ||
     request.nextUrl.pathname.startsWith("/analytics") ||
+    request.nextUrl.pathname.startsWith("/usage") ||
     request.nextUrl.pathname.startsWith("/settings");
 
   if (!user && isDashboard) {

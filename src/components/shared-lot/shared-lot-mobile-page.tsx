@@ -10,6 +10,8 @@ import { LotStatsGrid, type LotStatsData } from "./lot-stats";
 import { MobileCapture } from "./mobile-capture";
 import { formatCurrency } from "@/src/lib/utils";
 import { normalizePlate } from "@/src/lib/plate";
+import type { OcrTokenUsage } from "@/src/lib/ocr/pipeline";
+import { formatTokenUsageLine } from "@/src/lib/ocr/format-token-usage";
 import { AlertTriangle, MapPin, RefreshCw } from "lucide-react";
 
 interface ResolvePayload {
@@ -43,6 +45,7 @@ export function SharedLotMobilePage({ token }: { token: string }) {
   const [ocrPlate, setOcrPlate] = React.useState("");
   const [confidence, setConfidence] = React.useState<number | null>(null);
   const [engine, setEngine] = React.useState<string | null>(null);
+  const [tokenUsage, setTokenUsage] = React.useState<OcrTokenUsage | null>(null);
 
   const [processingOcr, setProcessingOcr] = React.useState(false);
   const [lookupBusy, setLookupBusy] = React.useState(false);
@@ -92,6 +95,7 @@ export function SharedLotMobilePage({ token }: { token: string }) {
     setLookupComplete(false);
     setDisputePanel(null);
     setDisputeNote("");
+    setTokenUsage(null);
     try {
       const fd = new FormData();
       fd.append("token", token);
@@ -104,6 +108,14 @@ export function SharedLotMobilePage({ token }: { token: string }) {
       setOcrPlate(p);
       setConfidence(typeof data.confidence === "number" ? data.confidence : null);
       setEngine(data.engine ?? null);
+      const tu = data.tokenUsage as OcrTokenUsage | undefined;
+      setTokenUsage(
+        tu &&
+          (tu.provider === "openai" || tu.provider === "gemini") &&
+          typeof tu.model === "string"
+          ? tu
+          : null,
+      );
     } catch (e) {
       setLookupError(e instanceof Error ? e.message : "OCR failed");
     } finally {
@@ -342,6 +354,12 @@ export function SharedLotMobilePage({ token }: { token: string }) {
               </Badge>
             )}
           </div>
+          {tokenUsage && (
+            <p className="text-[11px] leading-snug text-muted-foreground">
+              <span className="font-medium text-foreground">Model call:</span>{" "}
+              <span className="font-mono">{formatTokenUsageLine(tokenUsage)}</span>
+            </p>
+          )}
         </div>
 
         <Button

@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { withSharedLotToken } from "@/src/lib/shared-lot/api-helpers";
-import { processWithOpenAI, processWithTesseract } from "@/src/lib/ocr/pipeline";
+import { logOcrInferenceUsage } from "@/src/lib/ocr/inference-logger";
+import { fetchOrgOcrDetectionMode } from "@/src/lib/ocr/fetch-org-detection-mode";
+import { runServerOcrPipeline } from "@/src/lib/ocr/server-ocr-pipeline";
 import { touchLinkLastUsed } from "@/src/lib/shared-lot/service";
 
 export const maxDuration = 60;
@@ -21,20 +23,22 @@ export async function POST(request: NextRequest) {
 
   const gated = await withSharedLotToken(request, token ?? undefined, async (ctx) => {
     await touchLinkLastUsed(ctx.link.id);
+    const detectionMode = await fetchOrgOcrDetectionMode(ctx.link.organization_id);
     const imageBytes = Buffer.from(await imageFile.arrayBuffer());
     const mimeType = imageFile.type || "image/jpeg";
-
-    const openaiKey = process.env.OPENAI_API_KEY;
-    if (openaiKey) {
-      try {
-        const result = await processWithOpenAI(imageBytes, mimeType, openaiKey, "gpt-4o-mini");
-        if (result.plate) return result;
-      } catch {
-        /* fall through */
-      }
-    }
-
-    return processWithTesseract(imageBytes);
+    return runServerOcrPipeline({
+      imageBytes,
+      mimeType,
+      logLabel: "api/shared-lot/process-image",
+      detectionMode,
+      onInferenceUsage: (tokenUsage) =>
+        logOcrInferenceUsage({
+          organizationId: ctx.link.organization_id,
+          parkingLotId: ctx.lot.id,
+          source: "shared_lot",
+          tokenUsage,
+        }),
+    });
   });
 
   if (!gated.ok) return NextResponse.json(gated.body, { status: gated.status });

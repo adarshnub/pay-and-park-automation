@@ -6,17 +6,21 @@ import { Badge } from "@/src/components/ui/badge";
 import { Button } from "@/src/components/ui/button";
 import { Spinner } from "@/src/components/ui/spinner";
 import { cn } from "@/src/lib/utils";
+import type { OcrTokenUsage } from "@/src/lib/ocr/pipeline";
+import { formatTokenUsageLine } from "@/src/lib/ocr/format-token-usage";
 import { FlaskConical, Image as ImageIcon, RefreshCw, Upload, X } from "lucide-react";
 
 interface CapabilityResponse {
   modes: string[];
   methods: Array<{ id: string; mode: string; label: string }>;
   models: string[];
+  geminiModels: string[];
   openaiConfigured: boolean;
+  geminiConfigured: boolean;
 }
 
 interface PlaygroundResult {
-  mode: "free" | "openai";
+  mode: "free" | "openai" | "gemini";
   method: string;
   model: string | null;
   plate: string;
@@ -25,6 +29,7 @@ interface PlaygroundResult {
   isValidIndianPlate: boolean;
   message: string | null;
   error: string | null;
+  tokenUsage?: OcrTokenUsage | null;
 }
 
 function scoreVariant(score: number): "success" | "warning" | "destructive" {
@@ -41,9 +46,14 @@ export default function OcrPlaygroundPage() {
   const [running, setRunning] = useState(false);
   const [error, setError] = useState("");
   const [results, setResults] = useState<PlaygroundResult[]>([]);
-  const [selectedModes, setSelectedModes] = useState<string[]>(["free", "openai"]);
-  const [selectedMethods, setSelectedMethods] = useState<string[]>(["tesseract", "vision"]);
+  const [selectedModes, setSelectedModes] = useState<string[]>(["free", "openai", "gemini"]);
+  const [selectedMethods, setSelectedMethods] = useState<string[]>([
+    "tesseract",
+    "vision",
+    "gemini-vision",
+  ]);
   const [selectedModels, setSelectedModels] = useState<string[]>([]);
+  const [selectedGeminiModels, setSelectedGeminiModels] = useState<string[]>([]);
   const [isDragOver, setIsDragOver] = useState(false);
 
   useEffect(() => {
@@ -53,7 +63,8 @@ export default function OcrPlaygroundPage() {
         const res = await fetch("/api/ocr/playground");
         const data = (await res.json()) as CapabilityResponse;
         setCapabilities(data);
-        setSelectedModels(data.models);
+        setSelectedModels(data.models ?? []);
+        setSelectedGeminiModels(data.geminiModels ?? []);
       } catch {
         setError("Failed to load playground capabilities");
       } finally {
@@ -70,6 +81,7 @@ export default function OcrPlaygroundPage() {
   }, [previewUrl]);
 
   const openaiEnabled = useMemo(() => selectedModes.includes("openai"), [selectedModes]);
+  const geminiEnabled = useMemo(() => selectedModes.includes("gemini"), [selectedModes]);
 
   function toggle(value: string, current: string[], setter: (v: string[]) => void) {
     setter(
@@ -107,6 +119,7 @@ export default function OcrPlaygroundPage() {
       formData.append("modes", JSON.stringify(selectedModes));
       formData.append("methods", JSON.stringify(selectedMethods));
       formData.append("models", JSON.stringify(selectedModels));
+      formData.append("geminiModels", JSON.stringify(selectedGeminiModels));
 
       const res = await fetch("/api/ocr/playground", {
         method: "POST",
@@ -211,6 +224,50 @@ export default function OcrPlaygroundPage() {
                 {!capabilities?.openaiConfigured && (
                   <p className="text-xs text-warning">
                     OPENAI_API_KEY is not configured; OpenAI runs will return an error.
+                  </p>
+                )}
+              </div>
+            )}
+
+            {geminiEnabled && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <p className="text-sm font-medium">Gemini models</p>
+                  <div className="flex gap-2">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => setSelectedGeminiModels(capabilities?.geminiModels ?? [])}
+                    >
+                      Select all
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => setSelectedGeminiModels([])}
+                    >
+                      Clear
+                    </Button>
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-4">
+                  {(capabilities?.geminiModels ?? []).map((model) => (
+                    <label key={model} className="flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={selectedGeminiModels.includes(model)}
+                        onChange={() => toggle(model, selectedGeminiModels, setSelectedGeminiModels)}
+                      />
+                      <span>{model}</span>
+                    </label>
+                  ))}
+                </div>
+                {!capabilities?.geminiConfigured && (
+                  <p className="text-xs text-warning">
+                    GEMINI_API_KEY is missing or not an AI Studio key (must start with AIza); Gemini
+                    runs will return an error.
                   </p>
                 )}
               </div>
@@ -358,6 +415,12 @@ export default function OcrPlaygroundPage() {
                 )}
                 {!result.error && result.message && (
                   <p className="text-xs text-warning">{result.message}</p>
+                )}
+                {result.tokenUsage && (
+                  <p className="text-xs text-muted-foreground">
+                    <span className="font-medium text-foreground">Tokens:</span>{" "}
+                    <span className="font-mono">{formatTokenUsageLine(result.tokenUsage)}</span>
+                  </p>
                 )}
               </div>
             ))}

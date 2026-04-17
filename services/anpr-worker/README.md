@@ -27,6 +27,20 @@ pip install -r requirements.txt
 python worker.py
 ```
 
+## Run as EasyOCR HTTP service
+
+This mode is used by Next.js as primary OCR (`OCR_SERVICE_URL` + `OCR_SERVICE_SECRET`).
+
+```bash
+cd services/anpr-worker
+pip install -r requirements.txt
+export OCR_SERVICE_SECRET=replace-with-random-shared-secret
+uvicorn http_api:app --host 0.0.0.0 --port 8000
+```
+
+Health check: `GET /health`  
+OCR endpoint: `POST /ocr` with bearer token + JSON `{ "imageBase64": "..." }`
+
 ## Docker
 
 Pass env from the monorepo root file, for example:

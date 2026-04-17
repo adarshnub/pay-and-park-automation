@@ -9,14 +9,15 @@
 5. [Project Structure](#project-structure)
 6. [Database Schema](#database-schema)
 7. [OCR Pipeline](#ocr-pipeline)
-8. [Check-In / Check-Out Flows](#check-in--check-out-flows)
-9. [Billing Logic](#billing-logic)
-10. [Dashboard & Analytics](#dashboard--analytics)
-11. [Authentication & Authorization](#authentication--authorization)
-12. [Setup & Deployment](#setup--deployment)
-13. [Environment Variables](#environment-variables)
-14. [Operational Runbook](#operational-runbook)
-15. [API Contracts](#api-contracts)
+8. [API usage for plate detection](#api-usage-for-plate-detection)
+9. [Check-In / Check-Out Flows](#check-in--check-out-flows)
+10. [Billing Logic](#billing-logic)
+11. [Dashboard & Analytics](#dashboard--analytics)
+12. [Authentication & Authorization](#authentication--authorization)
+13. [Setup & Deployment](#setup--deployment)
+14. [Environment Variables](#environment-variables)
+15. [Operational Runbook](#operational-runbook)
+16. [API Contracts](#api-contracts)
 
 ---
 
@@ -296,11 +297,55 @@ pay-and-park-automation/
 
 ### Inline OCR (API Route)
 
-For immediate feedback in the UI, the `/api/ocr/process` route:
-- Accepts multipart form data with an image.
-- If `OPENAI_API_KEY` is set, calls OpenAI Vision directly.
-- Otherwise returns an empty plate requiring manual entry.
-- The async worker handles background processing for audit and retry.
+For immediate feedback in the UI, **`POST /api/ocr/process`** and **`POST /api/shared-lot/process-image`** run the same server pipeline (`runServerOcrPipeline` in `src/lib/ocr/server-ocr-pipeline.ts`): optional EasyOCR service, then Gemini, then OpenAI, then Edge Tesseract, then local Tesseract (subject to Vercel flags). See [API usage for plate detection](#api-usage-for-plate-detection) for provider order, models, and cost notes.
+
+The async worker still handles **queued** `ocr_jobs` for uploads that go through the worker path.
+
+---
+
+## API usage for plate detection
+
+This section describes **which providers and models** are used for number-plate reads, **when** each runs, and how that relates to **cost and quotas**. Exact pricing changes over time; use each vendor’s current dashboard for billing.
+
+### Two execution paths
+
+| Path | Trigger | Code |
+|------|---------|------|
+| **Synchronous (Next.js)** | Dashboard check-in/out image helper or shared-lot photo flow | `POST /api/ocr/process`, `POST /api/shared-lot/process-image` → `runServerOcrPipeline` |
+| **Asynchronous (Python worker)** | `ocr_jobs` row in `pending` state; worker polls Supabase | `services/anpr-worker/worker.py` + `ocr_engine.py` |
+
+A single user upload in the dashboard or on `/s/...` normally hits **one** synchronous pipeline call per image. The worker path is separate (queue + poll interval).
+
+### Synchronous pipeline (Next.js) — try order
+
+The server tries sources **in order** until one returns a usable plate (or all fail). You are only charged by **cloud vendors** for steps that actually run and succeed (or sometimes for failed calls depending on provider); EasyOCR on your own host is **infra cost only**.
+
+| Step | Provider | Model / runtime | Env vars | Notes |
+|------|----------|-----------------|----------|-------|
+| 1 | **EasyOCR HTTP service** (self-hosted) | EasyOCR `Reader(["en"])` + plate heuristics in `http_api.py` | `OCR_SERVICE_URL`, `OCR_SERVICE_SECRET` | Primary when configured. Default request timeout **20s** from Next.js. No Google/OpenAI tokens. |
+| 2 | **Google Gemini** (Generative Language API) | Default **`gemini-2.0-flash`**; override with `GEMINI_MODEL` | `GEMINI_API_KEY`, optional `GEMINI_MODEL` | AI Studio keys start with **`AIza`**. Uses image + short JSON-style prompt; `temperature: 0`, `maxOutputTokens: 128`. Retries **429 / 5xx** a few times with backoff in `processWithGemini`. |
+| 3 | **OpenAI** | **`gpt-4o-mini`** (vision) with **low** image detail on these routes | `OPENAI_API_KEY` | Charged per OpenAI vision + token rules. |
+| 4 | **Supabase Edge + Tesseract.js** | Tesseract in Edge runtime | `SUPABASE_OCR_EDGE_URL`, `OCR_EDGE_SECRET`, plus Supabase anon/service key for gateway `Authorization` | Optional; **Deno may not support Tesseract’s worker path** — treat as experimental. |
+| 5 | **Tesseract.js (Node)** | Local worker in Node | On Vercel: disabled unless `SHARED_LOT_ALLOW_SERVER_TESSERACT=true` (needs suitable `maxDuration`) | Heavy CPU; mainly for local/dev. |
+
+**Preprocessing:** Images are often normalized with **Sharp** in Node (`preprocessImageForOcr`) before being sent to Gemini, OpenAI, or Edge.
+
+### Asynchronous worker (Python) — try order
+
+| Step | Provider | Model / runtime | Env vars | When |
+|------|----------|-----------------|----------|------|
+| 1 | **EasyOCR + OpenCV** | `Reader(["en"], gpu=False)` + contour pipeline | Same Supabase env as worker | Every `pending` job |
+| 2 | **OpenAI** (optional) | **`gpt-4o-mini`** chat completions + vision content | `OPENAI_API_KEY` | When EasyOCR confidence is below `OCR_CONFIDENCE_THRESHOLD` (default **70**) and OpenAI returns higher confidence |
+
+### How to minimize paid API usage
+
+1. Run the **EasyOCR HTTP service** (`services/anpr-worker/http_api.py`) and set `OCR_SERVICE_URL` / `OCR_SERVICE_SECRET` so Next.js resolves plates without calling Gemini or OpenAI.
+2. Keep the worker healthy for **async** jobs so fewer retries and manual corrections are needed.
+3. Omit `GEMINI_API_KEY` / `OPENAI_API_KEY` in environments where manual plate entry is acceptable.
+
+### Response field `engine`
+
+Responses use a small set of values in `OcrRunResult`: **`free`** (EasyOCR HTTP service, or Tesseract-based reads in the pipeline), **`gemini`**, **`openai`**. The same `free` label is used for the Vercel “please type the plate” fallback when no provider returns text (`server-ocr-pipeline.ts`). It does **not** distinguish EasyOCR HTTP from Tesseract in JSON today; infer from logs or which env vars you configured.
 
 ---
 

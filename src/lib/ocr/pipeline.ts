@@ -1,13 +1,23 @@
 import { correctOcrMisreads, normalizePlate, parseIndianPlate } from "@/src/lib/plate";
 
-export type OcrMethod = "free" | "openai";
+export type OcrMethod = "free" | "openai" | "gemini";
+
+/** Present when the winning OCR path was a paid cloud vision API. */
+export interface OcrTokenUsage {
+  provider: "openai" | "gemini";
+  model: string;
+  promptTokens: number | null;
+  completionTokens: number | null;
+  totalTokens: number | null;
+}
 
 export interface OcrRunResult {
   plate: string;
   confidence: number;
-  engine: "free" | "openai";
+  engine: "free" | "openai" | "gemini";
   croppedPlateUrl: string | null;
   message?: string | null;
+  tokenUsage?: OcrTokenUsage | null;
 }
 
 const NOISE_WORDS = ["GOVT", "KERALA", "MISSION", "IND", "OF"];
@@ -137,7 +147,7 @@ function salvageStandardPlateFromNoise(raw: string): string | null {
   return best;
 }
 
-async function preprocessImage(imageBytes: Buffer): Promise<Buffer> {
+export async function preprocessImageForOcr(imageBytes: Buffer): Promise<Buffer> {
   const sharp = (await import("sharp")).default;
 
   return sharp(imageBytes)
@@ -150,22 +160,13 @@ async function preprocessImage(imageBytes: Buffer): Promise<Buffer> {
     .toBuffer();
 }
 
-export async function processWithTesseract(imageBytes: Buffer): Promise<OcrRunResult> {
-  const Tesseract = await import("tesseract.js");
-
-  let processed: Buffer;
-  try {
-    processed = await preprocessImage(imageBytes);
-  } catch {
-    processed = imageBytes;
-  }
-
-  const { data } = await Tesseract.recognize(processed, "eng", {
-    logger: () => {},
-  });
-
-  const rawText = data.text.trim();
-  if (!rawText) {
+/** Turn Tesseract raw output into the same shape as local `processWithTesseract`. */
+export function parseTesseractRawToPlateResult(
+  rawText: string,
+  dataConfidence: number,
+): OcrRunResult {
+  const trimmed = rawText.trim();
+  if (!trimmed) {
     return {
       plate: "",
       confidence: 0,
@@ -175,7 +176,7 @@ export async function processWithTesseract(imageBytes: Buffer): Promise<OcrRunRe
     };
   }
 
-  const candidates = extractPlateCandidates(rawText);
+  const candidates = extractPlateCandidates(trimmed);
   let bestPlate = "";
   let bestConf = 0;
   let bestValid = false;
@@ -196,7 +197,9 @@ export async function processWithTesseract(imageBytes: Buffer): Promise<OcrRunRe
         fuzzy.district.length === 2 &&
         fuzzy.series.length >= 2 &&
         fuzzy.number.length === 4;
-      const lineConf = Math.round((data.confidence ?? 50) * (looksLikeStrongStandard ? 0.95 : 0.85));
+      const lineConf = Math.round(
+        (dataConfidence ?? 50) * (looksLikeStrongStandard ? 0.95 : 0.85),
+      );
       if (!bestValid || lineConf > bestConf) {
         bestPlate = fuzzy.normalized;
         bestConf = Math.min(95, lineConf);
@@ -206,23 +209,23 @@ export async function processWithTesseract(imageBytes: Buffer): Promise<OcrRunRe
   }
 
   if (!bestValid) {
-    const combined = rawText.replace(/\s+/g, "");
+    const combined = trimmed.replace(/\s+/g, "");
     const cleaned = correctOcrMisreads(combined);
     const parsed = parseIndianPlate(cleaned);
 
     if (parsed.isValid) {
       bestPlate = parsed.normalized;
-      bestConf = Math.min(80, Math.round((data.confidence ?? 40) * 0.7));
+      bestConf = Math.min(80, Math.round((dataConfidence ?? 40) * 0.7));
       bestValid = true;
     } else {
       const salvaged = salvageStandardPlateFromNoise(cleaned);
       if (salvaged) {
         bestPlate = salvaged;
-        bestConf = Math.min(55, Math.round((data.confidence ?? 30) * 0.55));
+        bestConf = Math.min(55, Math.round((dataConfidence ?? 30) * 0.55));
         bestValid = true;
       } else {
         bestPlate = "";
-        bestConf = Math.min(25, Math.round((data.confidence ?? 30) * 0.25));
+        bestConf = Math.min(25, Math.round((dataConfidence ?? 30) * 0.25));
       }
     }
   }
@@ -236,13 +239,32 @@ export async function processWithTesseract(imageBytes: Buffer): Promise<OcrRunRe
   };
 }
 
+export async function processWithTesseract(imageBytes: Buffer): Promise<OcrRunResult> {
+  const Tesseract = await import("tesseract.js");
+
+  let processed: Buffer;
+  try {
+    processed = await preprocessImageForOcr(imageBytes);
+  } catch {
+    processed = imageBytes;
+  }
+
+  const { data } = await Tesseract.recognize(processed, "eng", {
+    logger: () => {},
+  });
+
+  return parseTesseractRawToPlateResult(data.text ?? "", data.confidence ?? 50);
+}
+
 export async function processWithOpenAI(
   imageBytes: Buffer,
   mimeType: string,
   apiKey: string,
   model = "gpt-4o-mini",
+  options?: { imageDetail?: "low" | "high" | "auto" },
 ): Promise<OcrRunResult> {
   const base64 = imageBytes.toString("base64");
+  const imageDetail = options?.imageDetail ?? "high";
 
   const response = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
@@ -272,7 +294,7 @@ If you cannot detect a plate, return {"plate": "", "confidence": 0}`,
               type: "image_url",
               image_url: {
                 url: `data:${mimeType || "image/jpeg"};base64,${base64}`,
-                detail: "high",
+                detail: imageDetail,
               },
             },
           ],
@@ -285,7 +307,14 @@ If you cannot detect a plate, return {"plate": "", "confidence": 0}`,
 
   if (!response.ok) throw new Error(`OpenAI API error: ${response.status}`);
 
-  const data = await response.json();
+  const data = (await response.json()) as {
+    choices?: { message?: { content?: string } }[];
+    usage?: {
+      prompt_tokens?: number;
+      completion_tokens?: number;
+      total_tokens?: number;
+    };
+  };
   const content = data.choices?.[0]?.message?.content ?? "";
   const jsonMatch = content.match(/\{[\s\S]*\}/);
   if (!jsonMatch) throw new Error("Could not parse OpenAI response");
@@ -299,10 +328,125 @@ If you cannot detect a plate, return {"plate": "", "confidence": 0}`,
     plate = parseResult.isValid ? parseResult.normalized : normalizePlate(plate);
   }
 
+  const u = data.usage;
+  const tokenUsage: OcrTokenUsage = {
+    provider: "openai",
+    model,
+    promptTokens: u?.prompt_tokens ?? null,
+    completionTokens: u?.completion_tokens ?? null,
+    totalTokens: u?.total_tokens ?? null,
+  };
+
   return {
     plate,
     confidence: Math.min(100, Math.max(0, Number(parsed.confidence ?? 0))),
     engine: "openai",
     croppedPlateUrl: null,
+    tokenUsage,
+  };
+}
+
+export async function processWithGemini(
+  imageBytes: Buffer,
+  mimeType: string,
+  apiKey: string,
+  model = "gemini-2.0-flash",
+): Promise<OcrRunResult> {
+  if (!apiKey.startsWith("AIza")) {
+    throw new Error(
+      "Gemini API key looks invalid. Google AI Studio keys start with 'AIza'. " +
+        "Create one at https://aistudio.google.com/app/apikey",
+    );
+  }
+
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
+  const body = JSON.stringify({
+    contents: [
+      {
+        parts: [
+          {
+            text: `Extract the Indian vehicle registration number plate from this image.
+Return ONLY JSON with:
+- "plate": uppercase plate text without spaces
+- "confidence": number from 0 to 100
+If no plate is found, return {"plate":"","confidence":0}.`,
+          },
+          {
+            inline_data: {
+              mime_type: mimeType || "image/jpeg",
+              data: imageBytes.toString("base64"),
+            },
+          },
+        ],
+      },
+    ],
+    generationConfig: { temperature: 0, maxOutputTokens: 128 },
+  });
+
+  const maxAttempts = 3;
+  let response: Response | null = null;
+  let lastErrorText = "";
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body,
+    });
+    if (response.ok) break;
+
+    lastErrorText = await response.text().catch(() => "");
+
+    // Retry on 429 / 5xx with exponential backoff + jitter
+    const retriable = response.status === 429 || response.status >= 500;
+    if (!retriable || attempt === maxAttempts) break;
+    const delay = 400 * 2 ** (attempt - 1) + Math.floor(Math.random() * 200);
+    await new Promise((r) => setTimeout(r, delay));
+  }
+
+  if (!response || !response.ok) {
+    const status = response?.status ?? 0;
+    const snippet = lastErrorText ? ` - ${lastErrorText.slice(0, 300)}` : "";
+    throw new Error(`Gemini API error: ${status}${snippet}`);
+  }
+
+  const data = (await response.json()) as {
+    candidates?: { content?: { parts?: { text?: string }[] } }[];
+    usageMetadata?: {
+      promptTokenCount?: number;
+      candidatesTokenCount?: number;
+      totalTokenCount?: number;
+    };
+  };
+  const text =
+    data?.candidates?.[0]?.content?.parts
+      ?.map((p: { text?: string }) => p.text ?? "")
+      .join("") ?? "";
+
+  const jsonMatch = text.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) throw new Error("Could not parse Gemini response");
+
+  const parsed = JSON.parse(jsonMatch[0]);
+  let plate = String(parsed.plate ?? "").trim();
+  if (plate) {
+    plate = correctOcrMisreads(plate);
+    const parseResult = parseIndianPlate(plate);
+    plate = parseResult.isValid ? parseResult.normalized : normalizePlate(plate);
+  }
+
+  const um = data.usageMetadata;
+  const tokenUsage: OcrTokenUsage = {
+    provider: "gemini",
+    model,
+    promptTokens: um?.promptTokenCount ?? null,
+    completionTokens: um?.candidatesTokenCount ?? null,
+    totalTokens: um?.totalTokenCount ?? null,
+  };
+
+  return {
+    plate,
+    confidence: Math.min(100, Math.max(0, Number(parsed.confidence ?? 0))),
+    engine: "gemini",
+    croppedPlateUrl: null,
+    tokenUsage,
   };
 }
