@@ -10,7 +10,8 @@ import { PlateReview } from "@/src/components/plate-review";
 import { checkInVehicle } from "@/src/actions/visits";
 import type { ParkingLot } from "@/src/lib/types";
 import type { OcrTokenUsage } from "@/src/lib/ocr/pipeline";
-import { Camera, Keyboard, CheckCircle, AlertCircle } from "lucide-react";
+import { formatCheckInDateTimeDisplay } from "@/src/lib/utils";
+import { Camera, Keyboard, CheckCircle, AlertCircle, Clock } from "lucide-react";
 
 type Step = "select-lot" | "capture" | "review" | "success" | "error";
 type InputMode = "camera" | "manual";
@@ -35,6 +36,7 @@ export default function CheckInPage() {
   const [capturedGeo, setCapturedGeo] = useState<{ lat: number; lng: number } | null>(null);
   const [capturedFile, setCapturedFile] = useState<File | null>(null);
   const [storagePath, setStoragePath] = useState<string | null>(null);
+  const [checkInRecordedAt, setCheckInRecordedAt] = useState<string | null>(null);
 
   useEffect(() => {
     async function fetchLots() {
@@ -135,6 +137,7 @@ export default function CheckInPage() {
       });
 
       if (!result.success) throw new Error(result.error);
+      setCheckInRecordedAt(result.checkInAt ?? new Date().toISOString());
       setStep("success");
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : "Failed to create visit");
@@ -158,6 +161,7 @@ export default function CheckInPage() {
     setCapturedGeo(null);
     setCapturedFile(null);
     setStoragePath(null);
+    setCheckInRecordedAt(null);
     setErrorMsg("");
   }
 
@@ -267,7 +271,21 @@ export default function CheckInPage() {
           <p className="mt-1 text-sm text-muted-foreground">
             The vehicle has been successfully registered.
           </p>
-          <Button onClick={handleReset} className="mt-4">
+          {checkInRecordedAt && (
+            <div className="mt-6 rounded-xl border border-border bg-muted/40 px-4 py-5">
+              <p className="flex items-center justify-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                <Clock className="h-4 w-4" aria-hidden />
+                Check-in time
+              </p>
+              <p className="mt-2 text-sm font-medium text-foreground sm:text-base">
+                {formatCheckInDateTimeDisplay(checkInRecordedAt).dateLine}
+              </p>
+              <p className="mt-1 text-3xl font-bold tabular-nums tracking-tight text-primary sm:text-4xl">
+                {formatCheckInDateTimeDisplay(checkInRecordedAt).timeLine}
+              </p>
+            </div>
+          )}
+          <Button onClick={handleReset} className="mt-6">
             Check In Another Vehicle
           </Button>
         </Card>

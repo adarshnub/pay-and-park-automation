@@ -11,7 +11,7 @@ import { PlateReview } from "@/src/components/plate-review";
 import { lookupActiveVisit, confirmCheckOut, type CheckOutLookupResult } from "@/src/actions/visits";
 import { formatPlateDisplay } from "@/src/lib/plate";
 import type { OcrTokenUsage } from "@/src/lib/ocr/pipeline";
-import { formatCurrency, formatDuration } from "@/src/lib/utils";
+import { formatCurrency, formatDuration, formatCheckInDateTimeDisplay } from "@/src/lib/utils";
 import {
   Camera,
   Keyboard,
@@ -57,6 +57,7 @@ function CheckOutContent() {
   const [confirmedPlate, setConfirmedPlate] = useState("");
   const [wasEdited, setWasEdited] = useState(false);
   const [receiptNumber, setReceiptNumber] = useState<string | null>(null);
+  const [checkOutRecordedAt, setCheckOutRecordedAt] = useState<string | null>(null);
 
   async function handleImageCaptured(file: File, _geo: { lat: number; lng: number } | null) {
     setProcessing(true);
@@ -135,6 +136,7 @@ function CheckOutContent() {
 
       if (!result.success) throw new Error(result.error);
       setReceiptNumber(result.receiptNumber ?? null);
+      setCheckOutRecordedAt(result.checkOutAt ?? new Date().toISOString());
       setStep("success");
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : "Checkout failed");
@@ -158,6 +160,7 @@ function CheckOutContent() {
     setConfirmedPlate("");
     setWasEdited(false);
     setReceiptNumber(null);
+    setCheckOutRecordedAt(null);
     setErrorMsg("");
   }
 
@@ -234,17 +237,34 @@ function CheckOutContent() {
       {step === "visit-details" && visitDetails && (
         <Card className="p-6">
           <h2 className="mb-4 text-lg font-semibold">Visit Summary</h2>
+          <div className="mb-5 space-y-4">
+            <div className="rounded-xl border border-border bg-muted/40 px-4 py-4 text-center">
+              <p className="flex items-center justify-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                <Clock className="h-4 w-4" aria-hidden />
+                Check-in time
+              </p>
+              <p className="mt-2 text-sm font-medium text-foreground sm:text-base">
+                {formatCheckInDateTimeDisplay(visitDetails.check_in_at).dateLine}
+              </p>
+              <p className="mt-1 text-3xl font-bold tabular-nums tracking-tight text-primary sm:text-4xl">
+                {formatCheckInDateTimeDisplay(visitDetails.check_in_at).timeLine}
+              </p>
+            </div>
+            <div className="rounded-xl border border-border bg-muted/40 px-4 py-4 text-center">
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                Time in lot
+              </p>
+              <p className="mt-2 text-2xl font-bold tabular-nums text-foreground sm:text-3xl">
+                {formatDuration(visitDetails.duration_minutes)}
+              </p>
+            </div>
+          </div>
           <div className="space-y-3">
             <Row label="Plate" value={formatPlateDisplay(visitDetails.normalized_plate)} mono />
             <Row label="Parking Lot" value={visitDetails.parking_lot_name} />
-            <Row
-              label={<><Clock className="mr-1 inline h-3.5 w-3.5" />Check-in Time</>}
-              value={new Date(visitDetails.check_in_at).toLocaleString()}
-            />
-            <Row label="Duration" value={formatDuration(visitDetails.duration_minutes)} />
             <Row label="Rate" value={`${formatCurrency(visitDetails.hourly_rate)}/hr`} />
             <Row label="Breakdown" value={visitDetails.breakdown} />
-            <div className="flex items-center justify-between pt-3 border-t border-border">
+            <div className="flex items-center justify-between border-t border-border pt-3">
               <span className="font-medium">
                 <IndianRupee className="mr-1 inline h-4 w-4" />
                 Amount Due
@@ -275,13 +295,36 @@ function CheckOutContent() {
               {formatCurrency(visitDetails.final_amount)}
             </p>
           )}
+          {checkOutRecordedAt && (
+            <div className="mx-auto mt-6 max-w-md rounded-xl border border-border bg-muted/40 px-4 py-5">
+              <p className="flex items-center justify-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                <Clock className="h-4 w-4" aria-hidden />
+                Check-out time
+              </p>
+              <p className="mt-2 text-sm font-medium text-foreground sm:text-base">
+                {formatCheckInDateTimeDisplay(checkOutRecordedAt).dateLine}
+              </p>
+              <p className="mt-1 text-3xl font-bold tabular-nums tracking-tight text-primary sm:text-4xl">
+                {formatCheckInDateTimeDisplay(checkOutRecordedAt).timeLine}
+              </p>
+            </div>
+          )}
+          {visitDetails && (
+            <div className="mx-auto mt-4 max-w-md rounded-lg border border-border bg-card px-3 py-3 text-sm text-muted-foreground">
+              <p>
+                <span className="font-medium text-foreground">Check-in: </span>
+                {formatCheckInDateTimeDisplay(visitDetails.check_in_at).timeLine} ·{" "}
+                {formatDuration(visitDetails.duration_minutes)} on site
+              </p>
+            </div>
+          )}
           {receiptNumber && (
-            <p className="mt-1 flex items-center justify-center gap-1 text-sm text-muted-foreground">
+            <p className="mt-4 flex items-center justify-center gap-1 text-sm text-muted-foreground">
               <Receipt className="h-3.5 w-3.5" />
               Receipt: {receiptNumber}
             </p>
           )}
-          <Button onClick={handleReset} className="mt-4">
+          <Button onClick={handleReset} className="mt-6">
             Process Another Vehicle
           </Button>
         </Card>

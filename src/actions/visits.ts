@@ -18,6 +18,8 @@ export interface CheckInInput {
 export interface CheckInResult {
   success: boolean;
   visitId?: string;
+  /** ISO timestamp recorded on the visit (for success UI). */
+  checkInAt?: string;
   error?: string;
 }
 
@@ -90,7 +92,7 @@ export async function checkInVehicle(input: CheckInInput): Promise<CheckInResult
       minimum_charge_snapshot: ratePlan?.minimum_charge ?? 20,
       checked_in_by: user.id,
     })
-    .select("id")
+    .select("id, check_in_at")
     .single();
 
   if (visitErr) {
@@ -117,7 +119,11 @@ export async function checkInVehicle(input: CheckInInput): Promise<CheckInResult
     } catch { /* best effort */ }
   }
 
-  return { success: true, visitId: visit.id };
+  return {
+    success: true,
+    visitId: visit.id,
+    checkInAt: visit.check_in_at,
+  };
 }
 
 export interface CheckOutInput {
@@ -215,6 +221,8 @@ export interface ConfirmCheckOutResult {
   success: boolean;
   invoiceId?: string;
   receiptNumber?: string;
+  /** ISO timestamp when the visit was checked out (for success UI). */
+  checkOutAt?: string;
   error?: string;
 }
 
@@ -316,5 +324,10 @@ export async function confirmCheckOut(
     confidence: input.confidence,
   });
 
-  return { success: true, invoiceId: invoice.id, receiptNumber };
+  return {
+    success: true,
+    invoiceId: invoice.id,
+    receiptNumber,
+    checkOutAt: now.toISOString(),
+  };
 }

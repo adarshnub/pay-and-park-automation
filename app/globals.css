@@ -38,3 +38,18 @@ body {
   background: var(--color-background);
   color: var(--color-foreground);
 }
+
+/* OCR “scanning” sweep over plate preview (shared link / mobile capture) */
+@keyframes plate-scan-sweep {
+  0% {
+    transform: translate3d(0, -120%, 0);
+  }
+  100% {
+    transform: translate3d(0, 520%, 0);
+  }
+}
+
+.plate-scan-sweep {
+  animation: plate-scan-sweep 2.1s ease-in-out infinite;
+  will-change: transform;
+}

@@ -6,13 +6,16 @@ import { Button } from "@/src/components/ui/button";
 import { Input } from "@/src/components/ui/input";
 import { Badge } from "@/src/components/ui/badge";
 import { Spinner } from "@/src/components/ui/spinner";
-import { LotStatsGrid, type LotStatsData } from "./lot-stats";
+import type { LotStatsData } from "./lot-stats";
 import { MobileCapture } from "./mobile-capture";
-import { formatCurrency } from "@/src/lib/utils";
+import {
+  cn,
+  formatCurrency,
+  formatCheckInDateTimeDisplay,
+  formatDuration,
+} from "@/src/lib/utils";
 import { normalizePlate } from "@/src/lib/plate";
-import type { OcrTokenUsage } from "@/src/lib/ocr/pipeline";
-import { formatTokenUsageLine } from "@/src/lib/ocr/format-token-usage";
-import { AlertTriangle, MapPin, RefreshCw } from "lucide-react";
+import { AlertTriangle, Check, MapPin, RefreshCw } from "lucide-react";
 
 interface ResolvePayload {
   linkName: string;
@@ -44,8 +47,6 @@ export function SharedLotMobilePage({ token }: { token: string }) {
   const [plate, setPlate] = React.useState("");
   const [ocrPlate, setOcrPlate] = React.useState("");
   const [confidence, setConfidence] = React.useState<number | null>(null);
-  const [engine, setEngine] = React.useState<string | null>(null);
-  const [tokenUsage, setTokenUsage] = React.useState<OcrTokenUsage | null>(null);
 
   const [processingOcr, setProcessingOcr] = React.useState(false);
   const [lookupBusy, setLookupBusy] = React.useState(false);
@@ -55,6 +56,10 @@ export function SharedLotMobilePage({ token }: { token: string }) {
   const [lookupComplete, setLookupComplete] = React.useState(false);
   const [lookupError, setLookupError] = React.useState("");
   const [successMsg, setSuccessMsg] = React.useState("");
+  /** Full-screen payment-style confirmation after check-in / check-out. */
+  const [successFlash, setSuccessFlash] = React.useState<
+    null | { kind: "checkin" } | { kind: "checkout"; receipt?: string }
+  >(null);
   const [disputePanel, setDisputePanel] = React.useState<{
     conflictingVisitId: string;
     otherParkingLotName: string;
@@ -62,6 +67,21 @@ export function SharedLotMobilePage({ token }: { token: string }) {
   } | null>(null);
   const [disputeNote, setDisputeNote] = React.useState("");
   const [disputeBusy, setDisputeBusy] = React.useState(false);
+  /** After lookup finds an active visit: false = only big Check out; true = bill + complete payment. */
+  const [checkoutDetailsOpen, setCheckoutDetailsOpen] = React.useState(false);
+
+  React.useEffect(() => {
+    if (!visit) setCheckoutDetailsOpen(false);
+  }, [visit?.id]);
+
+  React.useEffect(() => {
+    if (!checkoutDetailsOpen) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [checkoutDetailsOpen]);
 
   const loadResolve = React.useCallback(async () => {
     setLoadingResolve(true);
@@ -87,6 +107,12 @@ export function SharedLotMobilePage({ token }: { token: string }) {
     loadResolve();
   }, [loadResolve]);
 
+  React.useEffect(() => {
+    if (!successFlash) return;
+    const id = window.setTimeout(() => setSuccessFlash(null), 3200);
+    return () => window.clearTimeout(id);
+  }, [successFlash]);
+
   async function onImageFile(file: File) {
     setProcessingOcr(true);
     setLookupError("");
@@ -95,7 +121,6 @@ export function SharedLotMobilePage({ token }: { token: string }) {
     setLookupComplete(false);
     setDisputePanel(null);
     setDisputeNote("");
-    setTokenUsage(null);
     try {
       const fd = new FormData();
       fd.append("token", token);
@@ -107,15 +132,12 @@ export function SharedLotMobilePage({ token }: { token: string }) {
       setPlate(p);
       setOcrPlate(p);
       setConfidence(typeof data.confidence === "number" ? data.confidence : null);
-      setEngine(data.engine ?? null);
-      const tu = data.tokenUsage as OcrTokenUsage | undefined;
-      setTokenUsage(
-        tu &&
-          (tu.provider === "openai" || tu.provider === "gemini") &&
-          typeof tu.model === "string"
-          ? tu
-          : null,
-      );
+
+      const trimmed = p.trim().toUpperCase();
+      setProcessingOcr(false);
+      if (trimmed) {
+        await runLookup(trimmed);
+      }
     } catch (e) {
       setLookupError(e instanceof Error ? e.message : "OCR failed");
     } finally {
@@ -123,8 +145,8 @@ export function SharedLotMobilePage({ token }: { token: string }) {
     }
   }
 
-  async function runLookup() {
-    const trimmed = plate.trim().toUpperCase();
+  async function runLookup(plateOverride?: string) {
+    const trimmed = (plateOverride ?? plate).trim().toUpperCase();
     if (!trimmed) {
       setLookupError("Enter or detect a plate number");
       return;
@@ -202,11 +224,11 @@ export function SharedLotMobilePage({ token }: { token: string }) {
         }
         throw new Error(data.error ?? "Check-in failed");
       }
-      setSuccessMsg(`Checked in ${trimmed}`);
+      setSuccessMsg("");
+      setSuccessFlash({ kind: "checkin" });
       setPlate("");
       setOcrPlate("");
       setConfidence(null);
-      setEngine(null);
       setVisit(null);
       setLookupComplete(false);
       await loadResolve();
@@ -265,11 +287,14 @@ export function SharedLotMobilePage({ token }: { token: string }) {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Checkout failed");
-      setSuccessMsg(`Checked out · Receipt ${data.receiptNumber ?? ""}`);
+      setSuccessMsg("");
+      setSuccessFlash({
+        kind: "checkout",
+        receipt: data.receiptNumber ? String(data.receiptNumber) : undefined,
+      });
       setPlate("");
       setOcrPlate("");
       setConfidence(null);
-      setEngine(null);
       setVisit(null);
       setLookupComplete(false);
       await loadResolve();
@@ -302,35 +327,158 @@ export function SharedLotMobilePage({ token }: { token: string }) {
   }
 
   return (
-    <div className="mx-auto min-h-screen max-w-lg px-4 pb-10 pt-4">
-      <header className="mb-4 space-y-1">
+    <div className="mx-auto min-h-screen max-w-lg px-4 pb-12 pt-4">
+      {visit && checkoutDetailsOpen && (
+        <div
+          className="fixed inset-0 z-90 flex min-h-0 flex-col bg-blue-600 text-white"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="checkout-sheet-title"
+        >
+          <div className="mx-auto flex w-full max-w-lg shrink-0 items-center justify-between gap-3 px-4 pt-[max(0.75rem,env(safe-area-inset-top))] pb-3">
+            <p
+              id="checkout-sheet-title"
+              className="text-xs font-semibold uppercase tracking-wide text-blue-100"
+            >
+              Checkout &amp; payment
+            </p>
+            <button
+              type="button"
+              className="shrink-0 text-sm font-medium text-white underline-offset-4 hover:underline disabled:opacity-50"
+              onClick={() => setCheckoutDetailsOpen(false)}
+              disabled={actionBusy}
+            >
+              Back
+            </button>
+          </div>
+
+          <div className="mx-auto flex min-h-0 w-full max-w-lg flex-1 flex-col overflow-y-auto overscroll-contain px-4 pb-4">
+            <p className="text-center font-mono text-2xl font-bold tracking-wide text-white sm:text-3xl">
+              {visit.normalized_plate}
+            </p>
+            <div className="mt-4 space-y-4 rounded-2xl bg-white/95 p-4 text-foreground shadow-xl ring-1 ring-white/20 sm:p-5">
+              <div className="rounded-xl border border-border bg-card px-4 py-4 text-center shadow-sm">
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  Check-in time
+                </p>
+                <p className="mt-2 text-sm font-medium leading-snug text-foreground sm:text-base">
+                  {formatCheckInDateTimeDisplay(visit.check_in_at).dateLine}
+                </p>
+                <p className="mt-1 text-3xl font-bold tabular-nums tracking-tight text-primary sm:text-4xl">
+                  {formatCheckInDateTimeDisplay(visit.check_in_at).timeLine}
+                </p>
+              </div>
+              <div className="rounded-xl border border-border bg-card px-4 py-4 text-center shadow-sm">
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  Time in lot
+                </p>
+                <p className="mt-2 text-2xl font-bold tabular-nums text-foreground sm:text-3xl">
+                  {formatDuration(visit.duration_minutes)}
+                </p>
+              </div>
+              <p className="text-center text-xl font-bold text-foreground sm:text-2xl">
+                Amount due: {formatCurrency(visit.final_amount)}
+              </p>
+              <p className="text-center text-xs leading-snug text-muted-foreground sm:text-sm">
+                {visit.breakdown}
+              </p>
+            </div>
+          </div>
+
+          <div className="mx-auto w-full max-w-lg shrink-0 border-t border-blue-400/30 bg-blue-800/40 px-4 py-4 pb-[max(1rem,env(safe-area-inset-bottom))] backdrop-blur-md">
+            <Button
+              type="button"
+              variant="secondary"
+              className={cn(
+                "h-auto min-h-18 w-full rounded-2xl px-4 py-4 text-center text-lg font-bold shadow-[0_12px_40px_-8px_rgba(0,0,0,0.45)] ring-2 ring-white/25 transition-[transform,box-shadow] hover:bg-blue-50 hover:shadow-[0_14px_44px_-8px_rgba(0,0,0,0.5)] active:scale-[0.99] sm:min-h-20 sm:text-xl",
+                "border-0 bg-white text-blue-950 hover:text-blue-950 focus-visible:ring-white/60 focus-visible:ring-offset-2 focus-visible:ring-offset-blue-900",
+                "disabled:opacity-60",
+              )}
+              size="lg"
+              onClick={() => void doCheckoutConfirm()}
+              disabled={actionBusy}
+            >
+              {actionBusy ? (
+                <span className="flex w-full items-center justify-center py-1">
+                  <Spinner size="lg" className="text-blue-700" />
+                </span>
+              ) : (
+                "Complete checkout"
+              )}
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {successFlash && (
+        <button
+          type="button"
+          className={cn(
+            "fixed inset-0 z-100 flex cursor-default flex-col items-center justify-center p-6 text-white outline-none",
+            successFlash.kind === "checkin" ? "bg-emerald-600" : "bg-blue-600",
+          )}
+          onClick={() => setSuccessFlash(null)}
+          aria-label="Dismiss success confirmation"
+        >
+          <div
+            className={cn(
+              "mb-8 flex h-24 w-24 shrink-0 items-center justify-center rounded-full bg-white shadow-xl ring-4 sm:h-28 sm:w-28",
+              successFlash.kind === "checkin"
+                ? "text-emerald-600 ring-emerald-400/40"
+                : "text-blue-600 ring-blue-400/40",
+            )}
+            aria-hidden
+          >
+            <Check className="h-14 w-14 sm:h-16 sm:w-16" strokeWidth={2.75} />
+          </div>
+          <p className="text-center text-2xl font-bold tracking-tight sm:text-3xl">
+            {successFlash.kind === "checkin" ? "Check-in successful" : "Checkout complete"}
+          </p>
+          {successFlash.kind === "checkout" && (
+            <p className="mt-2 max-w-sm px-2 text-center text-base text-blue-50 sm:text-lg">
+              Payment recorded and vehicle checked out.
+            </p>
+          )}
+          {successFlash.kind === "checkout" && successFlash.receipt && (
+            <p className="mt-4 text-center text-lg text-blue-50">
+              Receipt <span className="font-mono font-semibold">{successFlash.receipt}</span>
+            </p>
+          )}
+          <p
+            className={cn(
+              "mt-10 max-w-xs text-center text-sm",
+              successFlash.kind === "checkin" ? "text-emerald-100/95" : "text-blue-100/95",
+            )}
+          >
+            Tap anywhere to continue
+          </p>
+        </button>
+      )}
+
+      <header className="mb-3 space-y-1">
         <Badge variant="secondary" className="text-xs">
           Staff link
         </Badge>
-        <h1 className="text-xl font-bold leading-tight">{resolve.lot.name}</h1>
+        <h1 className="text-xl font-bold leading-tight sm:text-2xl">{resolve.lot.name}</h1>
         {resolve.lot.address && (
-          <p className="flex items-start gap-1 text-xs text-muted-foreground">
-            <MapPin className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <p className="flex items-start gap-1.5 text-sm text-muted-foreground">
+            <MapPin className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
             {resolve.lot.address}
           </p>
         )}
-        <p className="text-xs text-muted-foreground">{resolve.linkName}</p>
       </header>
 
-      <LotStatsGrid stats={resolve.stats} />
+      <Card className="mt-4 space-y-5 border-border/80 p-5 shadow-md sm:mt-5 sm:p-6">
+        <MobileCapture
+          variant="hero"
+          cameraOnly
+          isProcessing={processingOcr}
+          onFileSelected={onImageFile}
+          disabled={processingOcr || actionBusy}
+        />
 
-      <Card className="mt-4 space-y-4 p-4">
-        <h2 className="text-sm font-semibold">Scan plate</h2>
-        <MobileCapture onFileSelected={onImageFile} disabled={processingOcr || actionBusy} />
-        {processingOcr && (
-          <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Spinner size="sm" />
-            Reading plate…
-          </div>
-        )}
-
-        <div className="space-y-2">
-          <label className="text-xs font-medium text-muted-foreground">Plate number</label>
+        <div className="space-y-3">
+          <label className="text-base font-bold text-foreground sm:text-lg">Plate number</label>
           <Input
             value={plate}
             onChange={(e) => {
@@ -339,33 +487,20 @@ export function SharedLotMobilePage({ token }: { token: string }) {
               setDisputePanel(null);
             }}
             placeholder="e.g. KL01AA9100"
-            className="text-center font-mono text-lg font-bold tracking-wider"
+            className="min-h-17 rounded-xl border-2 px-4 py-4 text-center font-mono text-2xl font-bold tracking-wider placeholder:text-base sm:min-h-19 sm:text-3xl sm:placeholder:text-lg"
             disabled={actionBusy}
+            inputMode="text"
+            autoCapitalize="characters"
+            autoCorrect="off"
+            spellCheck={false}
           />
-          <div className="flex flex-wrap gap-2">
-            {engine && (
-              <Badge variant="outline" className="text-[10px]">
-                {engine}
-              </Badge>
-            )}
-            {confidence != null && (
-              <Badge variant="outline" className="text-[10px]">
-                {confidence}% confidence
-              </Badge>
-            )}
-          </div>
-          {tokenUsage && (
-            <p className="text-[11px] leading-snug text-muted-foreground">
-              <span className="font-medium text-foreground">Model call:</span>{" "}
-              <span className="font-mono">{formatTokenUsageLine(tokenUsage)}</span>
-            </p>
-          )}
         </div>
 
         <Button
-          className="w-full"
+          className="min-h-17 w-full rounded-xl text-lg font-bold sm:min-h-19 sm:text-xl"
+          size="lg"
           variant="secondary"
-          onClick={runLookup}
+          onClick={() => void runLookup()}
           disabled={lookupBusy || !plate.trim() || actionBusy}
         >
           {lookupBusy ? <Spinner size="sm" className="text-primary-foreground" /> : "Look up vehicle"}
@@ -432,33 +567,30 @@ export function SharedLotMobilePage({ token }: { token: string }) {
 
         {!visit && lookupComplete && plate.trim() && (
           <div className="rounded-lg border border-border bg-muted/30 p-3">
-            <p className="text-xs font-medium text-muted-foreground">No active visit at this lot</p>
-            <p className="mt-1 text-sm">You can check this vehicle in.</p>
-            <Button className="mt-3 w-full" onClick={doCheckIn} disabled={actionBusy}>
+            <Button
+              className="min-h-14 w-full text-lg font-semibold"
+              size="lg"
+              onClick={doCheckIn}
+              disabled={actionBusy}
+            >
               {actionBusy ? <Spinner size="sm" className="text-primary-foreground" /> : "Check in"}
             </Button>
           </div>
         )}
 
-        {visit && (
-          <div className="space-y-3 rounded-lg border border-primary/25 bg-primary/5 p-3">
-            <p className="text-xs font-medium uppercase text-muted-foreground">Checkout preview</p>
-            <p className="font-mono text-lg font-bold">{visit.normalized_plate}</p>
-            <p className="text-xs text-muted-foreground">
-              In since {new Date(visit.check_in_at).toLocaleString()}
-            </p>
-            <p className="text-sm">
-              Duration: <strong>{visit.duration_minutes} min</strong>
-            </p>
-            <p className="text-lg font-bold text-success">
-              {formatCurrency(visit.final_amount)}
-            </p>
-            <p className="text-xs text-muted-foreground">{visit.breakdown}</p>
-            <Button className="w-full" onClick={doCheckoutConfirm} disabled={actionBusy}>
-              {actionBusy ? <Spinner size="sm" className="text-primary-foreground" /> : "Confirm check out"}
+        {visit && !checkoutDetailsOpen && (
+          <div className="rounded-lg border border-primary/30 bg-primary/5 p-3">
+            <Button
+              className="min-h-17 w-full rounded-xl text-lg font-bold shadow-md sm:min-h-19 sm:text-xl"
+              size="lg"
+              onClick={() => setCheckoutDetailsOpen(true)}
+              disabled={actionBusy}
+            >
+              Check out
             </Button>
           </div>
         )}
+
       </Card>
     </div>
   );
