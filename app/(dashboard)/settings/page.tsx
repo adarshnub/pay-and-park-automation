@@ -16,12 +16,13 @@ import {
   createLotShareLink,
   revokeLotShareLink,
   rotateLotShareLinkToken,
+  getLotShareLinkUrlForCopy,
   updateOrganizationOcrDetectionMode,
   getOcrDetectionStrategyLabels,
   type LotShareLinkSummary,
 } from "@/src/actions/settings";
 import { normalizeOcrDetectionMode, type OcrDetectionMode } from "@/src/lib/ocr/detection-mode";
-import { Plus, Trash2, Save, Building2, Link2, Ban, Copy, X } from "lucide-react";
+import { Plus, Trash2, Save, Building2, Link2, Ban, Copy, X, RefreshCw } from "lucide-react";
 import type { ParkingLot, RatePlan } from "@/src/lib/types";
 
 /** Toggle the “OCR & API usage” card on Settings (deployment / try-order summary). */
@@ -292,12 +293,37 @@ export default function SettingsPage() {
     setSaving(null);
   }
 
-  async function handleCopyRenewShareLink(linkId: string) {
+  async function handleCopyShareLink(linkId: string) {
+    setSaving(`copy-${linkId}`);
+    try {
+      const result = await getLotShareLinkUrlForCopy(linkId);
+      if (!result.success || !result.linkUrl) {
+        showError(result.error ?? "Could not copy link");
+        return;
+      }
+      const absolute = toAbsoluteShareUrl(
+        result.linkUrl,
+        Boolean(result.baseUrlMissing),
+      );
+      try {
+        await navigator.clipboard.writeText(absolute);
+        showSuccess("Link copied to clipboard.");
+      } catch {
+        setPendingShareUrl(absolute);
+        setCopyDone(false);
+        showError("Could not copy automatically — use the field below to copy manually.");
+      }
+    } finally {
+      setSaving(null);
+    }
+  }
+
+  async function handleRegenerateShareLink(linkId: string) {
     const ok = window.confirm(
       "A new shareable URL will be created and copied. Anyone using the old link will lose access. Continue?",
     );
     if (!ok) return;
-    setSaving(`copy-${linkId}`);
+    setSaving(`regen-${linkId}`);
     const result = await rotateLotShareLinkToken(linkId);
     if (result.success && result.linkUrl) {
       const absolute = toAbsoluteShareUrl(
@@ -481,18 +507,38 @@ export default function SettingsPage() {
                               </p>
                             </div>
                             {link.is_active && (
-                              <Button
-                                type="button"
-                                size="sm"
-                                variant="outline"
-                                className="shrink-0"
-                                disabled={saving === `copy-${link.id}`}
-                                title="Creates a new URL and copies it. Old link stops working."
-                                onClick={() => handleCopyRenewShareLink(link.id)}
-                              >
-                                <Copy className="mr-1.5 h-3.5 w-3.5" />
-                                {saving === `copy-${link.id}` ? "…" : "Copy link"}
-                              </Button>
+                              <div className="flex shrink-0 flex-wrap gap-1.5">
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="outline"
+                                  disabled={
+                                    saving === `copy-${link.id}` ||
+                                    saving === `regen-${link.id}`
+                                  }
+                                  title="Copy the current shareable URL"
+                                  onClick={() => void handleCopyShareLink(link.id)}
+                                >
+                                  <Copy className="mr-1.5 h-3.5 w-3.5" />
+                                  {saving === `copy-${link.id}` ? "…" : "Copy link"}
+                                </Button>
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="outline"
+                                  disabled={
+                                    saving === `copy-${link.id}` ||
+                                    saving === `regen-${link.id}`
+                                  }
+                                  title="Issue a new URL — the old link stops working"
+                                  aria-label="Regenerate link"
+                                  onClick={() => void handleRegenerateShareLink(link.id)}
+                                >
+                                  <RefreshCw
+                                    className={`h-3.5 w-3.5 ${saving === `regen-${link.id}` ? "animate-spin" : ""}`}
+                                  />
+                                </Button>
+                              </div>
                             )}
                           </li>
                         ))}
@@ -681,17 +727,38 @@ export default function SettingsPage() {
                     </div>
                     <div className="flex flex-wrap gap-2">
                       {link.is_active && (
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="outline"
-                          disabled={saving === `copy-${link.id}`}
-                          title="Creates a new URL and copies it. Old link stops working."
-                          onClick={() => handleCopyRenewShareLink(link.id)}
-                        >
-                          <Copy className="mr-1 h-4 w-4" />
-                          {saving === `copy-${link.id}` ? "…" : "Copy link"}
-                        </Button>
+                        <>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            disabled={
+                              saving === `copy-${link.id}` ||
+                              saving === `regen-${link.id}`
+                            }
+                            title="Copy the current shareable URL"
+                            onClick={() => void handleCopyShareLink(link.id)}
+                          >
+                            <Copy className="mr-1 h-4 w-4" />
+                            {saving === `copy-${link.id}` ? "…" : "Copy link"}
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            disabled={
+                              saving === `copy-${link.id}` ||
+                              saving === `regen-${link.id}`
+                            }
+                            title="Issue a new URL — the old link stops working"
+                            aria-label="Regenerate link"
+                            onClick={() => void handleRegenerateShareLink(link.id)}
+                          >
+                            <RefreshCw
+                              className={`h-4 w-4 ${saving === `regen-${link.id}` ? "animate-spin" : ""}`}
+                            />
+                          </Button>
+                        </>
                       )}
                       <Button
                         type="button"

@@ -259,6 +259,7 @@ export async function createLotShareLink(input: {
       name: input.name?.trim() || "Staff link",
       token_hash: hash,
       token_prefix: prefix,
+      token_secret: raw,
       expires_at: input.expiresAt || null,
       created_by: user.id,
     })
@@ -277,6 +278,57 @@ export async function createLotShareLink(input: {
     linkId: row.id,
     baseUrlMissing,
   };
+}
+
+/**
+ * Build the current share URL for an active link (does not rotate the token).
+ * Links created before token_secret was stored return an error until regenerated once.
+ */
+export async function getLotShareLinkUrlForCopy(linkId: string): Promise<{
+  success: boolean;
+  linkUrl?: string;
+  baseUrlMissing?: boolean;
+  error?: string;
+}> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { success: false, error: "Not authenticated" };
+
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select("organization_id, role")
+    .eq("id", user.id)
+    .single();
+
+  if (!profile || !["owner", "admin"].includes(profile.role)) {
+    return { success: false, error: "Insufficient permissions" };
+  }
+
+  const { data: row, error } = await supabase
+    .from("lot_shared_links")
+    .select("id, is_active, token_secret")
+    .eq("id", linkId)
+    .eq("organization_id", profile.organization_id)
+    .maybeSingle();
+
+  if (error || !row) return { success: false, error: "Link not found" };
+  if (!row.is_active) return { success: false, error: "Link is revoked" };
+  if (!row.token_secret?.trim()) {
+    return {
+      success: false,
+      error:
+        "This link was created before copy was supported. Use “Regenerate link” once to store a copyable URL.",
+    };
+  }
+
+  const base = getShareableLinkBaseUrl();
+  const baseUrlMissing = !base;
+  const path = `/s/${encodeURIComponent(row.token_secret.trim())}`;
+  const linkUrl = base ? `${base}${path}` : path;
+
+  return { success: true, linkUrl, baseUrlMissing };
 }
 
 /**
@@ -321,7 +373,7 @@ export async function rotateLotShareLinkToken(linkId: string): Promise<{
 
   const { error: updateErr } = await supabase
     .from("lot_shared_links")
-    .update({ token_hash: hash, token_prefix: prefix })
+    .update({ token_hash: hash, token_prefix: prefix, token_secret: raw })
     .eq("id", linkId)
     .eq("organization_id", profile.organization_id);
 

@@ -22,6 +22,130 @@ export interface OcrRunResult {
 
 const NOISE_WORDS = ["GOVT", "KERALA", "MISSION", "IND", "OF"];
 
+/** OpenAI may return `content` as a string or as an array of { type, text } parts. */
+function flattenOpenAiMessageContent(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content
+      .map((part) => {
+        if (part && typeof part === "object" && "text" in part) {
+          return String((part as { text?: string }).text ?? "");
+        }
+        return "";
+      })
+      .join("");
+  }
+  return "";
+}
+
+/**
+ * Extract the first `{ ... }` with balanced braces (respects JSON string escapes).
+ * Greedy `/\{[\s\S]*\}/` breaks on nested objects or `}` inside strings.
+ */
+function extractBalancedJsonObject(text: string): string | null {
+  const start = text.indexOf("{");
+  if (start < 0) return null;
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  for (let i = start; i < text.length; i++) {
+    const c = text[i];
+    if (escape) {
+      escape = false;
+      continue;
+    }
+    if (inString) {
+      if (c === "\\") {
+        escape = true;
+        continue;
+      }
+      if (c === '"') inString = false;
+      continue;
+    }
+    if (c === '"') {
+      inString = true;
+      continue;
+    }
+    if (c === "{") depth++;
+    else if (c === "}") {
+      depth--;
+      if (depth === 0) return text.slice(start, i + 1);
+    }
+  }
+  return null;
+}
+
+/** Pull JSON-looking bodies out of ```json ... ``` fences anywhere in the text. */
+function expandTextWithMarkdownFences(text: string): string[] {
+  const out = [text];
+  const re = /```(?:json)?\s*([\s\S]*?)```/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    const inner = m[1]?.trim();
+    if (inner) out.push(inner);
+  }
+  return out;
+}
+
+/**
+ * Parse {"plate":"...","confidence":n} from vision LLM text (markdown fences, prose, etc.).
+ */
+function parsePlateJsonFromLlmText(rawContent: string): {
+  plate: string;
+  confidence: number;
+} {
+  const content = (rawContent ?? "").trim();
+  if (!content) throw new Error("Empty model response");
+
+  const slices = expandTextWithMarkdownFences(content);
+  for (const slice of slices) {
+    let pos = 0;
+    while (pos < slice.length) {
+      const idx = slice.indexOf("{", pos);
+      if (idx < 0) break;
+      const jsonStr = extractBalancedJsonObject(slice.slice(idx));
+      if (jsonStr) {
+        try {
+          const parsed = JSON.parse(jsonStr) as {
+            plate?: unknown;
+            confidence?: unknown;
+          };
+          if (Object.prototype.hasOwnProperty.call(parsed, "plate")) {
+            const conf = Number(parsed.confidence ?? 0);
+            return {
+              plate: String(parsed.plate ?? "").trim(),
+              confidence: Number.isFinite(conf)
+                ? Math.min(100, Math.max(0, conf))
+                : 0,
+            };
+          }
+        } catch {
+          /* try next `{` */
+        }
+      }
+      pos = idx + 1;
+    }
+  }
+
+  const plateQuoted = content.match(/"plate"\s*:\s*"((?:\\.|[^"\\])*)"/);
+  if (plateQuoted) {
+    let plate: string;
+    try {
+      plate = JSON.parse(`"${plateQuoted[1]}"`) as string;
+    } catch {
+      plate = plateQuoted[1].replace(/\\"/g, '"');
+    }
+    const conf = content.match(/"confidence"\s*:\s*(\d+(?:\.\d+)?)/);
+    const c = conf ? Number(conf[1]) : 0;
+    return {
+      plate: plate.trim(),
+      confidence: Number.isFinite(c) ? Math.min(100, Math.max(0, c)) : 70,
+    };
+  }
+
+  throw new Error("Could not parse plate JSON from model response");
+}
+
 function extractPlateCandidates(rawText: string): string[] {
   const lines = rawText
     .split("\n")
@@ -308,19 +432,16 @@ If you cannot detect a plate, return {"plate": "", "confidence": 0}`,
   if (!response.ok) throw new Error(`OpenAI API error: ${response.status}`);
 
   const data = (await response.json()) as {
-    choices?: { message?: { content?: string } }[];
+    choices?: { message?: { content?: unknown } }[];
     usage?: {
       prompt_tokens?: number;
       completion_tokens?: number;
       total_tokens?: number;
     };
   };
-  const content = data.choices?.[0]?.message?.content ?? "";
-  const jsonMatch = content.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) throw new Error("Could not parse OpenAI response");
-
-  const parsed = JSON.parse(jsonMatch[0]);
-  let plate = (parsed.plate ?? "").toString().trim();
+  const content = flattenOpenAiMessageContent(data.choices?.[0]?.message?.content);
+  const parsed = parsePlateJsonFromLlmText(content);
+  let plate = parsed.plate;
 
   if (plate) {
     plate = correctOcrMisreads(plate);
@@ -339,7 +460,7 @@ If you cannot detect a plate, return {"plate": "", "confidence": 0}`,
 
   return {
     plate,
-    confidence: Math.min(100, Math.max(0, Number(parsed.confidence ?? 0))),
+    confidence: parsed.confidence,
     engine: "openai",
     croppedPlateUrl: null,
     tokenUsage,
@@ -380,7 +501,7 @@ If no plate is found, return {"plate":"","confidence":0}.`,
         ],
       },
     ],
-    generationConfig: { temperature: 0, maxOutputTokens: 128 },
+    generationConfig: { temperature: 0, maxOutputTokens: 256 },
   });
 
   const maxAttempts = 3;
@@ -411,22 +532,29 @@ If no plate is found, return {"plate":"","confidence":0}.`,
 
   const data = (await response.json()) as {
     candidates?: { content?: { parts?: { text?: string }[] } }[];
+    promptFeedback?: { blockReason?: string };
     usageMetadata?: {
       promptTokenCount?: number;
       candidatesTokenCount?: number;
       totalTokenCount?: number;
     };
   };
+
+  if (!data.candidates?.length) {
+    const br = data.promptFeedback?.blockReason;
+    throw new Error(
+      br ? `Gemini blocked the request (${br})` : "Gemini returned no candidates",
+    );
+  }
+
   const text =
-    data?.candidates?.[0]?.content?.parts
-      ?.map((p: { text?: string }) => p.text ?? "")
+    data.candidates
+      .flatMap((c) => c.content?.parts ?? [])
+      .map((p: { text?: string }) => p.text ?? "")
       .join("") ?? "";
 
-  const jsonMatch = text.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) throw new Error("Could not parse Gemini response");
-
-  const parsed = JSON.parse(jsonMatch[0]);
-  let plate = String(parsed.plate ?? "").trim();
+  const parsed = parsePlateJsonFromLlmText(text);
+  let plate = parsed.plate;
   if (plate) {
     plate = correctOcrMisreads(plate);
     const parseResult = parseIndianPlate(plate);
@@ -444,7 +572,7 @@ If no plate is found, return {"plate":"","confidence":0}.`,
 
   return {
     plate,
-    confidence: Math.min(100, Math.max(0, Number(parsed.confidence ?? 0))),
+    confidence: parsed.confidence,
     engine: "gemini",
     croppedPlateUrl: null,
     tokenUsage,
