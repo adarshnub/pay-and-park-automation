@@ -34,6 +34,7 @@ import {
   X,
   RefreshCw,
   ChevronDown,
+  Loader2,
 } from "lucide-react";
 import type { ParkingLot, RatePlan } from "@/src/lib/types";
 
@@ -171,6 +172,80 @@ function ParkingLotPendingUrlBanner({
   );
 }
 
+function ParkingLotsLoadingSkeleton() {
+  return (
+    <div
+      className="mb-4 space-y-3"
+      role="status"
+      aria-live="polite"
+      aria-busy="true"
+      aria-label="Loading parking lots"
+    >
+      <span className="sr-only">Loading parking lots…</span>
+      {[0, 1, 2].map((i) => (
+        <div
+          key={i}
+          className="relative overflow-hidden rounded-lg border border-border bg-card px-4 py-3 shadow-sm"
+        >
+          <div className="settings-skeleton-shimmer pointer-events-none" aria-hidden />
+          <div className="relative flex items-center justify-between gap-2">
+            <div className="flex min-w-0 flex-1 items-center gap-3">
+              <div className="h-10 w-10 shrink-0 animate-pulse rounded-lg bg-muted" />
+              <div className="min-w-0 flex-1 space-y-2.5">
+                <div className="h-3.5 w-[42%] max-w-44 animate-pulse rounded-md bg-muted" />
+                <div className="h-3 w-[58%] max-w-60 animate-pulse rounded-md bg-muted/80" />
+              </div>
+            </div>
+            <div className="h-9 w-9 shrink-0 animate-pulse rounded-md bg-muted/90" />
+          </div>
+          <div className="relative mt-3 space-y-2.5 border-t border-border pt-3">
+            <div className="h-3 w-36 animate-pulse rounded-md bg-muted" />
+            <div className="h-16 w-full animate-pulse rounded-lg bg-muted/75" />
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+              <div className="h-9 w-full flex-1 animate-pulse rounded-md bg-muted/80" />
+              <div className="h-9 w-full shrink-0 animate-pulse rounded-md bg-muted sm:w-28" />
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ShareLinksListSkeleton() {
+  return (
+    <div
+      className="space-y-2"
+      role="status"
+      aria-live="polite"
+      aria-busy="true"
+      aria-label="Loading share links"
+    >
+      <span className="sr-only">Loading share links…</span>
+      {[0, 1].map((i) => (
+        <div
+          key={i}
+          className="relative overflow-hidden rounded-lg border border-border bg-card px-3 py-2.5"
+        >
+          <div className="settings-skeleton-shimmer pointer-events-none" aria-hidden />
+          <div className="relative flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="min-w-0 flex-1 space-y-2">
+              <div className="h-4 w-40 max-w-[55%] animate-pulse rounded-md bg-muted" />
+              <div className="h-3 w-56 max-w-[75%] animate-pulse rounded-md bg-muted/80" />
+              <div className="h-3 w-48 max-w-[65%] animate-pulse rounded-md bg-muted/70" />
+            </div>
+            <div className="flex shrink-0 gap-2">
+              <div className="h-8 w-24 animate-pulse rounded-md bg-muted" />
+              <div className="h-8 w-9 animate-pulse rounded-md bg-muted/90" />
+              <div className="h-8 w-9 animate-pulse rounded-md bg-muted/90" />
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 interface OrgForm { name: string }
 interface LotForm { name: string; address: string; total_capacity: number }
 interface RateForm { hourly_rate: number; minimum_charge: number; grace_period_minutes: number; daily_cap: number }
@@ -185,6 +260,8 @@ export default function SettingsPage() {
   /** All links in org, for parking-lot list (includes parking_lot_id) */
   const [allOrgShareLinks, setAllOrgShareLinks] = useState<LotShareLinkSummary[]>([]);
   const [loadingShareLinks, setLoadingShareLinks] = useState(false);
+  /** Initial fetch of parking lots + org share links for the Parking Lots card */
+  const [parkingLotsLoading, setParkingLotsLoading] = useState(true);
   /** Optional label per lot when creating a share link from the Parking Lots card */
   const [shareLinkLabelsByLot, setShareLinkLabelsByLot] = useState<Record<string, string>>({});
   /** Full URL shown once after create or copy fallback — copyable in UI */
@@ -281,9 +358,15 @@ export default function SettingsPage() {
             loadShareLinks(firstId),
             loadAllOrgShareLinks(),
           ]);
+        } else {
+          setLots([]);
+          setSelectedLotId(null);
         }
       } catch {
-        // Supabase not configured
+        setLots([]);
+        setSelectedLotId(null);
+      } finally {
+        if (!cancelled) setParkingLotsLoading(false);
       }
     }
     void loadSettings();
@@ -598,8 +681,18 @@ export default function SettingsPage() {
       </Card>
 
       <Card className="p-6">
-        <h2 className="mb-4 text-lg font-semibold">Parking Lots</h2>
-        {lots.length > 0 && (
+        <div className="mb-4 flex items-center gap-2">
+          <h2 className="text-lg font-semibold">Parking Lots</h2>
+          {parkingLotsLoading && (
+            <Loader2
+              className="h-4 w-4 shrink-0 animate-spin text-muted-foreground"
+              aria-hidden
+            />
+          )}
+        </div>
+        {parkingLotsLoading ? (
+          <ParkingLotsLoadingSkeleton />
+        ) : lots.length > 0 ? (
           <div className="mb-4 space-y-2">
             {lots.map((lot) => {
               const lotLinksSorted = allOrgShareLinks
@@ -707,15 +800,31 @@ export default function SettingsPage() {
               );
             })}
           </div>
-        )}
-        <form onSubmit={lotForm.handleSubmit(handleAddLot)} className="space-y-3 rounded-lg border border-dashed border-border p-4">
+        ) : null}
+        <form
+          onSubmit={lotForm.handleSubmit(handleAddLot)}
+          className={`space-y-3 rounded-lg border border-dashed border-border p-4 transition-opacity duration-200 ${parkingLotsLoading ? "pointer-events-none opacity-60" : ""}`}
+        >
           <p className="text-sm font-medium text-muted-foreground">Add New Lot</p>
           <div className="grid gap-3 sm:grid-cols-3">
-            <Input placeholder="Lot name" {...lotForm.register("name", { required: true })} />
-            <Input placeholder="Address (optional)" {...lotForm.register("address")} />
-            <Input type="number" placeholder="Capacity" {...lotForm.register("total_capacity", { valueAsNumber: true, min: 1 })} />
+            <Input
+              placeholder="Lot name"
+              disabled={parkingLotsLoading}
+              {...lotForm.register("name", { required: true })}
+            />
+            <Input
+              placeholder="Address (optional)"
+              disabled={parkingLotsLoading}
+              {...lotForm.register("address")}
+            />
+            <Input
+              type="number"
+              placeholder="Capacity"
+              disabled={parkingLotsLoading}
+              {...lotForm.register("total_capacity", { valueAsNumber: true, min: 1 })}
+            />
           </div>
-          <Button type="submit" variant="outline" disabled={saving === "lot"}>
+          <Button type="submit" variant="outline" disabled={saving === "lot" || parkingLotsLoading}>
             <Plus className="mr-1.5 h-4 w-4" />
             {saving === "lot" ? "Adding..." : "Add Lot"}
           </Button>
@@ -800,7 +909,7 @@ export default function SettingsPage() {
             </p>
 
             {loadingShareLinks ? (
-              <p className="text-sm text-muted-foreground">Loading links…</p>
+              <ShareLinksListSkeleton />
             ) : shareLinks.length === 0 ? (
               <p className="text-sm text-muted-foreground">No links yet for this lot.</p>
             ) : (

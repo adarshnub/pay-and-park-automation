@@ -8,9 +8,26 @@ import {
   type OcrInferenceLogRow,
   type OcrInferenceModelRollup,
 } from "@/src/actions/inference-usage";
+import {
+  estimateInferenceCostUsd,
+  formatUsdEstimate,
+} from "@/src/lib/ocr/inference-cost-usd";
 import { Activity } from "lucide-react";
 
 const nf = new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 });
+
+function costForRow(r: OcrInferenceLogRow): string {
+  const p = r.prompt_tokens ?? 0;
+  const c = r.completion_tokens ?? 0;
+  if (p === 0 && c === 0) return "—";
+  const est = estimateInferenceCostUsd(r.provider, r.model, p, c);
+  return est ? formatUsdEstimate(est.usd) : "—";
+}
+
+function costForRollup(row: OcrInferenceModelRollup): string {
+  const est = estimateInferenceCostUsd(row.provider, row.model, row.sumPrompt, row.sumCompletion);
+  return est ? formatUsdEstimate(est.usd) : "—";
+}
 
 function formatTs(iso: string) {
   try {
@@ -45,6 +62,11 @@ export default function UsagePage() {
     void load();
   }, [load]);
 
+  const rollupEstimatedUsdTotal = rollup.reduce((acc, r) => {
+    const est = estimateInferenceCostUsd(r.provider, r.model, r.sumPrompt, r.sumCompletion);
+    return acc + (est?.usd ?? 0);
+  }, 0);
+
   return (
     <div className="mx-auto max-w-4xl space-y-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
@@ -56,7 +78,8 @@ export default function UsagePage() {
           <p className="text-sm text-muted-foreground">
             Paid OCR calls (OpenAI, Gemini) from the last 30 days. Each row is one API response
             (one processing attempt). EasyOCR / Tesseract do not use cloud tokens and are not
-            listed here.
+            listed here. Dollar amounts are approximate list-price estimates by model; your
+            provider invoice may differ.
           </p>
         </div>
         <Button type="button" variant="outline" size="sm" onClick={() => void load()} disabled={loading}>
@@ -98,7 +121,8 @@ export default function UsagePage() {
                   <th className="pb-2 pr-4 font-medium text-right">Calls</th>
                   <th className="pb-2 pr-4 font-medium text-right">Prompt Σ</th>
                   <th className="pb-2 pr-4 font-medium text-right">Output Σ</th>
-                  <th className="pb-2 font-medium text-right">Total Σ</th>
+                  <th className="pb-2 pr-4 font-medium text-right">Total Σ</th>
+                  <th className="pb-2 font-medium text-right">Est. USD Σ</th>
                 </tr>
               </thead>
               <tbody>
@@ -109,10 +133,21 @@ export default function UsagePage() {
                     <td className="py-2 pr-4 text-right tabular-nums">{nf.format(r.events)}</td>
                     <td className="py-2 pr-4 text-right tabular-nums">{nf.format(r.sumPrompt)}</td>
                     <td className="py-2 pr-4 text-right tabular-nums">{nf.format(r.sumCompletion)}</td>
-                    <td className="py-2 text-right tabular-nums font-medium">{nf.format(r.sumTotal)}</td>
+                    <td className="py-2 pr-4 text-right tabular-nums font-medium">{nf.format(r.sumTotal)}</td>
+                    <td className="py-2 text-right tabular-nums text-muted-foreground">{costForRollup(r)}</td>
                   </tr>
                 ))}
               </tbody>
+              <tfoot>
+                <tr className="border-t border-border font-medium">
+                  <td className="py-2 pr-4 text-left text-muted-foreground" colSpan={6}>
+                    Combined estimate (30 days)
+                  </td>
+                  <td className="py-2 text-right tabular-nums">
+                    {formatUsdEstimate(rollupEstimatedUsdTotal)}
+                  </td>
+                </tr>
+              </tfoot>
             </table>
           </div>
         </Card>
@@ -131,7 +166,8 @@ export default function UsagePage() {
                   <th className="pb-2 pr-3 font-medium">Model</th>
                   <th className="pb-2 pr-3 font-medium text-right">Prompt</th>
                   <th className="pb-2 pr-3 font-medium text-right">Output</th>
-                  <th className="pb-2 font-medium text-right">Total</th>
+                  <th className="pb-2 pr-3 font-medium text-right">Total</th>
+                  <th className="pb-2 font-medium text-right">Est. USD</th>
                 </tr>
               </thead>
               <tbody>
@@ -149,12 +185,15 @@ export default function UsagePage() {
                     <td className="py-2 pr-3 text-right tabular-nums">
                       {r.completion_tokens != null ? nf.format(r.completion_tokens) : "—"}
                     </td>
-                    <td className="py-2 text-right tabular-nums">
+                    <td className="py-2 pr-3 text-right tabular-nums">
                       {r.total_tokens != null
                         ? nf.format(r.total_tokens)
                         : r.prompt_tokens != null || r.completion_tokens != null
                           ? nf.format((r.prompt_tokens ?? 0) + (r.completion_tokens ?? 0))
                           : "—"}
+                    </td>
+                    <td className="py-2 text-right tabular-nums text-xs text-muted-foreground">
+                      {costForRow(r)}
                     </td>
                   </tr>
                 ))}

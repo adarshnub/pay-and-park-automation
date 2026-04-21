@@ -53,3 +53,45 @@ body {
   animation: plate-scan-sweep 2.1s ease-in-out infinite;
   will-change: transform;
 }
+
+/* Settings: parking lot & share-link list skeleton shimmer */
+@keyframes settings-skeleton-shimmer {
+  0% {
+    transform: translateX(-120%);
+  }
+  100% {
+    transform: translateX(280%);
+  }
+}
+
+.settings-skeleton-shimmer {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: inherit;
+  pointer-events: none;
+}
+
+.settings-skeleton-shimmer::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  width: 55%;
+  max-width: 14rem;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 255, 255, 0.55),
+    transparent
+  );
+  animation: settings-skeleton-shimmer 1.75s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settings-skeleton-shimmer::after {
+    animation: none;
+    opacity: 0.35;
+  }
+}
