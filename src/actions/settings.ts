@@ -298,13 +298,11 @@ export async function getLotShareLinkUrlForCopy(linkId: string): Promise<{
 
   const { data: profile } = await supabase
     .from("profiles")
-    .select("organization_id, role")
+    .select("organization_id")
     .eq("id", user.id)
     .single();
 
-  if (!profile || !["owner", "admin"].includes(profile.role)) {
-    return { success: false, error: "Insufficient permissions" };
-  }
+  if (!profile) return { success: false, error: "Profile not found" };
 
   const { data: row, error } = await supabase
     .from("lot_shared_links")

@@ -22,7 +22,19 @@ import {
   type LotShareLinkSummary,
 } from "@/src/actions/settings";
 import { normalizeOcrDetectionMode, type OcrDetectionMode } from "@/src/lib/ocr/detection-mode";
-import { Plus, Trash2, Save, Building2, Link2, Ban, Copy, X, RefreshCw } from "lucide-react";
+import { copyTextToClipboard } from "@/src/lib/copy-text";
+import {
+  Plus,
+  Trash2,
+  Save,
+  Building2,
+  Link2,
+  Ban,
+  Copy,
+  X,
+  RefreshCw,
+  ChevronDown,
+} from "lucide-react";
 import type { ParkingLot, RatePlan } from "@/src/lib/types";
 
 /** Toggle the “OCR & API usage” card on Settings (deployment / try-order summary). */
@@ -55,6 +67,110 @@ function toAbsoluteShareUrl(linkUrl: string, baseUrlMissing: boolean): string {
   return path;
 }
 
+function ParkingLotShareLinkRow({
+  link,
+  saving,
+  onCopy,
+  onRegen,
+}: {
+  link: LotShareLinkSummary;
+  saving: string | null;
+  onCopy: (id: string) => void;
+  onRegen: (id: string) => void;
+}) {
+  return (
+    <li className="flex flex-col gap-2 rounded-md bg-muted/50 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
+      <div className="min-w-0 text-xs">
+        <p className="font-medium text-foreground">{link.name}</p>
+        <p className="text-muted-foreground">
+          …{link.token_prefix} · {link.is_active ? "Active" : "Revoked"}
+        </p>
+      </div>
+      {link.is_active && (
+        <div className="flex shrink-0 flex-wrap gap-1.5">
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={saving === `copy-${link.id}` || saving === `regen-${link.id}`}
+            title="Copy the current shareable URL"
+            onClick={() => void onCopy(link.id)}
+          >
+            <Copy className="mr-1.5 h-3.5 w-3.5" />
+            {saving === `copy-${link.id}` ? "…" : "Copy link"}
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={saving === `copy-${link.id}` || saving === `regen-${link.id}`}
+            title="Issue a new URL — the old link stops working"
+            aria-label="Regenerate link"
+            onClick={() => void onRegen(link.id)}
+          >
+            <RefreshCw
+              className={`h-3.5 w-3.5 ${saving === `regen-${link.id}` ? "animate-spin" : ""}`}
+            />
+          </Button>
+        </div>
+      )}
+    </li>
+  );
+}
+
+function ParkingLotPendingUrlBanner({
+  url,
+  copyDone,
+  onDismiss,
+  onCopySuccess,
+  onCopyError,
+}: {
+  url: string;
+  copyDone: boolean;
+  onDismiss: () => void;
+  onCopySuccess: () => void;
+  onCopyError: () => void;
+}) {
+  return (
+    <div className="space-y-2 rounded-lg border border-primary/25 bg-primary/5 p-4">
+      <div className="flex items-start justify-between gap-2">
+        <p className="text-sm font-medium text-foreground">
+          Copy this link and share it with staff. The full URL is not shown again.
+        </p>
+        <button
+          type="button"
+          onClick={onDismiss}
+          className="rounded-md p-1 text-muted-foreground hover:bg-background hover:text-foreground"
+          aria-label="Dismiss"
+        >
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-stretch">
+        <Input
+          readOnly
+          value={url}
+          className="font-mono text-xs sm:flex-1"
+          onFocus={(e) => e.target.select()}
+        />
+        <Button
+          type="button"
+          variant="outline"
+          className="shrink-0 sm:w-auto"
+          onClick={async () => {
+            const ok = await copyTextToClipboard(url);
+            if (ok) onCopySuccess();
+            else onCopyError();
+          }}
+        >
+          <Copy className="mr-2 h-4 w-4" />
+          {copyDone ? "Copied" : "Copy"}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 interface OrgForm { name: string }
 interface LotForm { name: string; address: string; total_capacity: number }
 interface RateForm { hourly_rate: number; minimum_charge: number; grace_period_minutes: number; daily_cap: number }
@@ -69,9 +185,12 @@ export default function SettingsPage() {
   /** All links in org, for parking-lot list (includes parking_lot_id) */
   const [allOrgShareLinks, setAllOrgShareLinks] = useState<LotShareLinkSummary[]>([]);
   const [loadingShareLinks, setLoadingShareLinks] = useState(false);
-  const [newLinkLabel, setNewLinkLabel] = useState("");
-  /** Full URL shown once after create — copyable in UI */
+  /** Optional label per lot when creating a share link from the Parking Lots card */
+  const [shareLinkLabelsByLot, setShareLinkLabelsByLot] = useState<Record<string, string>>({});
+  /** Full URL shown once after create or copy fallback — copyable in UI */
   const [pendingShareUrl, setPendingShareUrl] = useState<string | null>(null);
+  /** Which lot card shows the pending URL banner (matches `parking_lot_id`) */
+  const [pendingShareUrlLotId, setPendingShareUrlLotId] = useState<string | null>(null);
   const [copyDone, setCopyDone] = useState(false);
   const [ocrDetectionMode, setOcrDetectionMode] = useState<OcrDetectionMode>("openai");
   const [strategyLabels, setStrategyLabels] = useState({
@@ -173,10 +292,11 @@ export default function SettingsPage() {
     };
   }, []);
 
-  useEffect(() => {
+  function clearPendingShareUrl() {
     setPendingShareUrl(null);
+    setPendingShareUrlLotId(null);
     setCopyDone(false);
-  }, [selectedLotId]);
+  }
 
   async function loadShareLinks(lotId: string) {
     setLoadingShareLinks(true);
@@ -260,16 +380,22 @@ export default function SettingsPage() {
       await supabase.from("parking_lots").update({ is_active: false }).eq("id", id);
       setLots((prev) => prev.filter((l) => l.id !== id));
       setAllOrgShareLinks((prev) => prev.filter((l) => l.parking_lot_id !== id));
+      setShareLinkLabelsByLot((prev) => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+      if (pendingShareUrlLotId === id) clearPendingShareUrl();
       showSuccess("Lot removed.");
     } catch { showError("Failed to delete lot"); }
   }
 
-  async function handleCreateShareLink() {
-    if (!selectedLotId) return;
-    setSaving("sharelink");
+  async function handleCreateShareLinkForLot(lotId: string) {
+    setSaving(`sharelink-${lotId}`);
+    const label = (shareLinkLabelsByLot[lotId] ?? "").trim();
     const result = await createLotShareLink({
-      parkingLotId: selectedLotId,
-      name: newLinkLabel.trim() || undefined,
+      parkingLotId: lotId,
+      name: label || undefined,
     });
     if (result.success && result.linkUrl && result.token) {
       const absolute = toAbsoluteShareUrl(
@@ -277,15 +403,16 @@ export default function SettingsPage() {
         Boolean(result.baseUrlMissing),
       );
       setPendingShareUrl(absolute);
+      setPendingShareUrlLotId(lotId);
       setCopyDone(false);
-      try {
-        await navigator.clipboard.writeText(absolute);
-      } catch {
-        /* user can copy from the field */
-      }
+      await copyTextToClipboard(absolute);
+      setShareLinkLabelsByLot((prev) => {
+        const next = { ...prev };
+        delete next[lotId];
+        return next;
+      });
       showSuccess("Staff link created. Copy it below — the full URL is not stored.");
-      setNewLinkLabel("");
-      await loadShareLinks(selectedLotId);
+      if (selectedLotId === lotId) await loadShareLinks(lotId);
       await loadAllOrgShareLinks();
     } else {
       showError(result.error ?? "Failed to create link");
@@ -305,11 +432,13 @@ export default function SettingsPage() {
         result.linkUrl,
         Boolean(result.baseUrlMissing),
       );
-      try {
-        await navigator.clipboard.writeText(absolute);
+      const copied = await copyTextToClipboard(absolute);
+      if (copied) {
         showSuccess("Link copied to clipboard.");
-      } catch {
+      } else {
+        const lotId = allOrgShareLinks.find((l) => l.id === linkId)?.parking_lot_id ?? null;
         setPendingShareUrl(absolute);
+        setPendingShareUrlLotId(lotId);
         setCopyDone(false);
         showError("Could not copy automatically — use the field below to copy manually.");
       }
@@ -330,14 +459,16 @@ export default function SettingsPage() {
         result.linkUrl,
         Boolean(result.baseUrlMissing),
       );
+      const lotId = allOrgShareLinks.find((l) => l.id === linkId)?.parking_lot_id ?? null;
       setPendingShareUrl(absolute);
+      setPendingShareUrlLotId(lotId);
       setCopyDone(false);
-      try {
-        await navigator.clipboard.writeText(absolute);
-      } catch {
-        /* field below */
-      }
-      showSuccess("New link copied. The previous URL no longer works.");
+      const copied = await copyTextToClipboard(absolute);
+      showSuccess(
+        copied
+          ? "New link copied. The previous URL no longer works."
+          : "New link ready — copy it from the field below. The previous URL no longer works.",
+      );
       if (selectedLotId) await loadShareLinks(selectedLotId);
       await loadAllOrgShareLinks();
     } else {
@@ -471,7 +602,11 @@ export default function SettingsPage() {
         {lots.length > 0 && (
           <div className="mb-4 space-y-2">
             {lots.map((lot) => {
-              const lotLinks = allOrgShareLinks.filter((l) => l.parking_lot_id === lot.id);
+              const lotLinksSorted = allOrgShareLinks
+                .filter((l) => l.parking_lot_id === lot.id)
+                .sort((a, b) => b.created_at.localeCompare(a.created_at));
+              const latestLink = lotLinksSorted[0];
+              const olderLinks = lotLinksSorted.slice(1);
               return (
                 <div key={lot.id} className="rounded-lg border border-border px-4 py-3">
                   <div className="flex items-center justify-between gap-2">
@@ -488,63 +623,86 @@ export default function SettingsPage() {
                       <Trash2 className="h-4 w-4 text-destructive" />
                     </Button>
                   </div>
-                  {lotLinks.length > 0 && (
-                    <div className="mt-3 space-y-2 border-t border-border pt-3">
-                      <p className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-                        <Link2 className="h-3.5 w-3.5" />
-                        Shareable staff links
-                      </p>
-                      <ul className="space-y-2">
-                        {lotLinks.map((link) => (
-                          <li
-                            key={link.id}
-                            className="flex flex-col gap-2 rounded-md bg-muted/50 px-3 py-2 sm:flex-row sm:items-center sm:justify-between"
-                          >
-                            <div className="min-w-0 text-xs">
-                              <p className="font-medium text-foreground">{link.name}</p>
-                              <p className="text-muted-foreground">
-                                …{link.token_prefix} · {link.is_active ? "Active" : "Revoked"}
-                              </p>
-                            </div>
-                            {link.is_active && (
-                              <div className="flex shrink-0 flex-wrap gap-1.5">
-                                <Button
-                                  type="button"
-                                  size="sm"
-                                  variant="outline"
-                                  disabled={
-                                    saving === `copy-${link.id}` ||
-                                    saving === `regen-${link.id}`
-                                  }
-                                  title="Copy the current shareable URL"
-                                  onClick={() => void handleCopyShareLink(link.id)}
-                                >
-                                  <Copy className="mr-1.5 h-3.5 w-3.5" />
-                                  {saving === `copy-${link.id}` ? "…" : "Copy link"}
-                                </Button>
-                                <Button
-                                  type="button"
-                                  size="sm"
-                                  variant="outline"
-                                  disabled={
-                                    saving === `copy-${link.id}` ||
-                                    saving === `regen-${link.id}`
-                                  }
-                                  title="Issue a new URL — the old link stops working"
-                                  aria-label="Regenerate link"
-                                  onClick={() => void handleRegenerateShareLink(link.id)}
-                                >
-                                  <RefreshCw
-                                    className={`h-3.5 w-3.5 ${saving === `regen-${link.id}` ? "animate-spin" : ""}`}
-                                  />
-                                </Button>
-                              </div>
-                            )}
-                          </li>
-                        ))}
-                      </ul>
+                  <div className="mt-3 space-y-3 border-t border-border pt-3">
+                    <p className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                      <Link2 className="h-3.5 w-3.5" />
+                      Shareable staff links
+                    </p>
+                    {latestLink ? (
+                      <>
+                        <ul className="space-y-2">
+                          <ParkingLotShareLinkRow
+                            link={latestLink}
+                            saving={saving}
+                            onCopy={handleCopyShareLink}
+                            onRegen={handleRegenerateShareLink}
+                          />
+                        </ul>
+                        {olderLinks.length > 0 && (
+                          <details className="group rounded-md border border-border bg-muted/30 [&_summary::-webkit-details-marker]:hidden">
+                            <summary className="flex cursor-pointer list-none items-center gap-1.5 px-3 py-2 text-xs font-medium text-muted-foreground hover:bg-muted/50 hover:text-foreground">
+                              <ChevronDown className="h-3.5 w-3.5 shrink-0 transition-transform duration-200 group-open:rotate-180" />
+                              Show {olderLinks.length} older link{olderLinks.length === 1 ? "" : "s"}
+                            </summary>
+                            <ul className="space-y-2 border-t border-border px-1 py-2">
+                              {olderLinks.map((link) => (
+                                <ParkingLotShareLinkRow
+                                  key={link.id}
+                                  link={link}
+                                  saving={saving}
+                                  onCopy={handleCopyShareLink}
+                                  onRegen={handleRegenerateShareLink}
+                                />
+                              ))}
+                            </ul>
+                          </details>
+                        )}
+                      </>
+                    ) : (
+                      <p className="text-xs text-muted-foreground">No links yet for this lot.</p>
+                    )}
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+                      <div className="min-w-0 flex-1">
+                        <label className="mb-1 block text-xs font-medium text-muted-foreground">
+                          Link label (optional)
+                        </label>
+                        <Input
+                          placeholder="e.g. Front gate tablet"
+                          value={shareLinkLabelsByLot[lot.id] ?? ""}
+                          onChange={(e) =>
+                            setShareLinkLabelsByLot((prev) => ({
+                              ...prev,
+                              [lot.id]: e.target.value,
+                            }))
+                          }
+                        />
+                      </div>
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        className="shrink-0"
+                        disabled={saving === `sharelink-${lot.id}`}
+                        onClick={() => void handleCreateShareLinkForLot(lot.id)}
+                      >
+                        <Plus className="mr-1.5 h-4 w-4" />
+                        {saving === `sharelink-${lot.id}` ? "Creating…" : "Create link"}
+                      </Button>
                     </div>
-                  )}
+                    {pendingShareUrl && pendingShareUrlLotId === lot.id && (
+                      <ParkingLotPendingUrlBanner
+                        url={pendingShareUrl}
+                        copyDone={copyDone}
+                        onDismiss={clearPendingShareUrl}
+                        onCopySuccess={() => {
+                          setCopyDone(true);
+                          setTimeout(() => setCopyDone(false), 2000);
+                        }}
+                        onCopyError={() =>
+                          showError("Could not copy — select the link and copy manually.")
+                        }
+                      />
+                    )}
+                  </div>
                 </div>
               );
             })}
@@ -613,10 +771,11 @@ export default function SettingsPage() {
       <Card className="p-6">
         <h2 className="mb-4 text-lg font-semibold flex items-center gap-2">
           <Link2 className="h-5 w-5" />
-          Shareable staff links (mobile)
+          Shareable staff links (details)
         </h2>
         <p className="mb-4 text-sm text-muted-foreground">
-          Create a link for the selected lot. Staff can open it on a phone to see occupancy and check vehicles in or out without logging in.
+          Create links from each lot in the <span className="font-medium text-foreground">Parking Lots</span> section
+          above. Staff can open a link on a phone to see occupancy and check vehicles in or out without logging in.
         </p>
         <p className="mb-4 text-sm text-muted-foreground">
           Set{" "}
@@ -629,79 +788,16 @@ export default function SettingsPage() {
         </p>
         {lots.length > 0 && selectedLotId ? (
           <div className="space-y-4">
-            <div className="rounded-lg border border-border bg-muted/40 px-3 py-2 text-sm">
-              <span className="text-muted-foreground">These links belong to </span>
+            <p className="rounded-lg border border-border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
               <span className="font-semibold text-foreground">
                 {lots.find((l) => l.id === selectedLotId)?.name ?? "—"}
               </span>
-              <span className="text-muted-foreground">
-                . Change lot with the <span className="font-medium text-foreground">Select Lot</span>{" "}
-                control in Rate Plan above.
+              <span>
+                {" "}
+                — full link list and revoke use the lot chosen in{" "}
+                <span className="font-medium text-foreground">Rate Plan</span> above.
               </span>
-            </div>
-            <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
-              <div className="flex-1">
-                <label className="mb-1 block text-sm font-medium">Link label (optional)</label>
-                <Input
-                  placeholder="e.g. Front gate tablet"
-                  value={newLinkLabel}
-                  onChange={(e) => setNewLinkLabel(e.target.value)}
-                />
-              </div>
-              <Button
-                type="button"
-                onClick={handleCreateShareLink}
-                disabled={saving === "sharelink"}
-              >
-                {saving === "sharelink" ? "Creating…" : "Create link"}
-              </Button>
-            </div>
-
-            {pendingShareUrl && (
-              <div className="space-y-2 rounded-lg border border-primary/25 bg-primary/5 p-4">
-                <div className="flex items-start justify-between gap-2">
-                  <p className="text-sm font-medium text-foreground">
-                    Copy this link and share it with staff. The full URL is not shown again.
-                  </p>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setPendingShareUrl(null);
-                      setCopyDone(false);
-                    }}
-                    className="rounded-md p-1 text-muted-foreground hover:bg-background hover:text-foreground"
-                    aria-label="Dismiss"
-                  >
-                    <X className="h-4 w-4" />
-                  </button>
-                </div>
-                <div className="flex flex-col gap-2 sm:flex-row sm:items-stretch">
-                  <Input
-                    readOnly
-                    value={pendingShareUrl}
-                    className="font-mono text-xs sm:flex-1"
-                    onFocus={(e) => e.target.select()}
-                  />
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="shrink-0 sm:w-auto"
-                    onClick={async () => {
-                      try {
-                        await navigator.clipboard.writeText(pendingShareUrl);
-                        setCopyDone(true);
-                        setTimeout(() => setCopyDone(false), 2000);
-                      } catch {
-                        showError("Could not copy — select the link and copy manually.");
-                      }
-                    }}
-                  >
-                    <Copy className="mr-2 h-4 w-4" />
-                    {copyDone ? "Copied" : "Copy"}
-                  </Button>
-                </div>
-              </div>
-            )}
+            </p>
 
             {loadingShareLinks ? (
               <p className="text-sm text-muted-foreground">Loading links…</p>
